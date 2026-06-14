@@ -237,6 +237,48 @@ def generate(comic, rtl=False, jobs=None, fallback='none', model_path=None,
             shutil.rmtree(tmp, ignore_errors=True)
 
 
+def repack(comic, out_dir=None, suffix='', log=None):
+    """Normalize a comic into a CBZ with flat, zero-padded page names in reading order.
+
+    KOReader orders archive pages by raw byte order of their paths. Archives with
+    chapter subfolders or odd names (e.g. a "- Appendice" folder sorting before
+    "00") then read out of order, and panel JSON keyed by page index misaligns.
+    Repacking to flat names like 0001.jpg, 0002.jpg, ... makes byte order == reading
+    order, so the book reads correctly AND panel indices line up.
+
+    Returns (out_path, page_count). Lossless: images are copied, only renamed.
+    """
+    log = log or (lambda *_: None)
+    comic = Path(comic).expanduser()
+    tmp = None
+    try:
+        if comic.is_dir():
+            root = comic
+        else:
+            tmp = tempfile.mkdtemp(prefix='pannello-repack-')
+            extract_archive(comic, tmp)
+            root = tmp
+        pages = list_pages(root)
+        if not pages:
+            raise ValueError(f'no page images found in {comic}')
+
+        dest_dir = Path(out_dir) if out_dir else comic.parent
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        out = dest_dir / f'{comic.stem}{suffix}.cbz'
+        if not comic.is_dir() and out.resolve() == comic.resolve():
+            out = dest_dir / f'{comic.stem}.pannello.cbz'
+
+        width = max(4, len(str(len(pages))))
+        with zipfile.ZipFile(out, 'w', zipfile.ZIP_STORED) as z:
+            for i, p in enumerate(pages, 1):
+                z.write(p, arcname=f'{i:0{width}d}{p.suffix.lower()}')
+        log(f'repacked {comic.name}: {len(pages)} pages -> {out.name}')
+        return out, len(pages)
+    finally:
+        if tmp:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
 def find_comics(folder):
     """Return comic archives under a folder (recursive), naturally sorted."""
     folder = Path(folder)

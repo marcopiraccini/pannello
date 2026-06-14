@@ -14,6 +14,12 @@ def _log(msg):
 
 
 def _process(comic, args, label=''):
+    if args.repack:
+        try:
+            comic, _ = core.repack(comic, out_dir=args.out_dir, log=_log)
+        except Exception as e:
+            _log(f'{label}repack failed: {comic}: {e}')
+            return False
     try:
         st = core.generate(
             comic, rtl=args.rtl, jobs=args.jobs, fallback=args.fallback,
@@ -39,6 +45,9 @@ def main(argv=None):
     ap.add_argument('input',
                     help='a comic (cbz/cbr/cb7/cbt/pdf), a folder of comics '
                          '(one JSON per archive), or a folder of page images')
+    ap.add_argument('--repack', action='store_true',
+                    help='first normalize the comic to a CBZ with flat reading-order '
+                         'page names (fixes books KOReader sorts wrong), then write JSON for it')
     ap.add_argument('--rtl', action='store_true',
                     help='right-to-left reading order (manga)')
     ap.add_argument('--fallback', choices=['none', 'model'], default='none',
