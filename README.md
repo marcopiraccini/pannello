@@ -74,6 +74,28 @@ pannello --help
 Input can be a single comic, a folder of comics (each gets its own JSON), or a
 folder of loose page images (treated as one comic named after the folder).
 
+### Fixing wrongly-ordered archives (`--repack`)
+
+The KOReader panel plugin matches panels to pages by **page index**, so
+pannello's page order must equal KOReader's. KOReader orders archive pages by the
+**raw byte order** of their entry paths. Most CBZ/CBR files are flat and
+zero-padded, so this is fine. But an archive with chapter subfolders or odd names
+can sort differently than its intended reading order -- e.g. a `From Hell - Appendice/`
+folder byte-sorts before `From Hell 00/` (because `-` < `0`), so KOReader shows
+43 appendix pages first. The book then reads out of order *and* every panel set
+lands on the wrong page.
+
+`--repack` fixes this by rewriting the comic into a CBZ with flat, zero-padded
+names (`0001.jpg`, `0002.jpg`, ...) in reading order, then writing the JSON for
+it. Byte order now equals reading order, so KOReader reads it correctly and
+panels line up:
+
+    pannello --repack "From Hell.cbr"      # -> "From Hell.cbz" + "From Hell.json"
+
+Put **both** files on the device and open the `.cbz` (not the original). Repacking
+is lossless (images are copied, only renamed). Archives that are already flat and
+ordered (most comics) don't need it.
+
 Key flags: `--rtl`, `-o/--out-dir`, `-j/--jobs` (default cores-2),
 `--limit N` (first N pages, for testing), `--fallback {none,model}`,
 `--model`, `--model-conf`, `-V/--version`.
