@@ -1,0 +1,13 @@
+{
+  "_source": "Pepper & Carrot by David Revoy, CC-BY 4.0, https://www.peppercarrot.com",
+  "_attribution": "Comic pages (c) David Revoy, used under CC-BY 4.0. Download via fetch_pc.py.",
+  "_note": "panels = number of human-counted navigable panels on the page (0 for a pure text/credits page). Labels verified by visual inspection at full resolution.",
+  "pages": {
+    "E10P01.jpg": 6,
+    "E10P02.jpg": 3,
+    "E10P03.jpg": 3,
+    "E10P04.jpg": 6,
+    "E10P05.jpg": 2,
+    "E10P06.jpg": 0
+  }
+}

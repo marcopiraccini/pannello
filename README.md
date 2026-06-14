@@ -1,0 +1,169 @@
+# pannello
+
+Detect comic-book panels and write the per-page JSON used by KOReader
+panel-zoom plugins. Point it at a `.cbz`/`.cbr` (or a whole folder) and it
+produces a `<comic>.json` next to each file.
+
+Panel detection uses the official [kumiko](https://github.com/njean42/kumiko)
+(vendored), with an optional CPU model fallback for pages where kumiko fails.
+
+Licensed AGPL-3.0-or-later (see [Licensing](#licensing)).
+
+## What it does
+
+- Reads `.cbz .cbr .cb7 .cbt .pdf` archives, or a folder of page images.
+- Detects panels per page, normalized to 0..1, stored in reading order.
+- Writes JSON named after the comic, in the format the plugin reads:
+
+```json
+{
+  "reading_direction": "ltr",
+  "total_pages": 2,
+  "pages": [
+    {"page": 1, "image": "p001.jpg",
+     "panels": [{"x": 0.04, "y": 0.01, "w": 0.92, "h": 0.19}]}
+  ]
+}
+```
+
+Temporary files (archive extraction) go to the system temp dir (`/tmp` on Linux)
+and are cleaned up afterwards.
+
+## Install
+
+System tools (only what your archives need):
+
+- `.cbr` -> `unrar`   (`apt install unrar`)
+- `.cb7` -> `7z`      (`apt install p7zip-full`)
+- `.pdf` -> `pdftoppm` (`apt install poppler-utils`)
+- `.cbz` -> nothing extra
+
+Then, from a checkout:
+
+```sh
+python3 -m venv .venv
+.venv/bin/pip install -e .
+```
+
+This installs the `pannello` command. The official kumiko is bundled, so there
+is nothing else to install for the base detector.
+
+### Optional model fallback
+
+CPU-only, no GPU required:
+
+```sh
+.venv/bin/pip install -e '.[model]'      # torch + ultralytics + huggingface_hub
+# if you have no CUDA GPU, install CPU torch first to avoid the big CUDA wheels:
+.venv/bin/pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+```
+
+Model weights download on first use into the Hugging Face cache.
+
+## Usage
+
+```sh
+pannello "My Comic.cbz"              # -> "My Comic.json" next to it
+pannello /path/to/library            # batch: one JSON per cbr/cbz found (recursive)
+pannello comic.cbz --rtl             # manga (right-to-left reading order)
+pannello library/ -o out/            # write all JSON into out/
+pannello comic.cbz --fallback model  # re-detect kumiko-failed pages with the model
+pannello --help
+```
+
+Input can be a single comic, a folder of comics (each gets its own JSON), or a
+folder of loose page images (treated as one comic named after the folder).
+
+Key flags: `--rtl`, `-o/--out-dir`, `-j/--jobs` (default cores-2),
+`--limit N` (first N pages, for testing), `--fallback {none,model}`,
+`--model`, `--model-conf`, `-V/--version`.
+
+### Choosing the model
+
+`--fallback model` runs a model only on pages kumiko fails on. Pick which model
+with `--model`:
+
+```sh
+pannello comic.cbz --fallback model --model general   # default: Western + manga (mosesb)
+pannello manga.cbz  --fallback model --model manga --rtl   # manga-only model (manga109)
+pannello comic.cbz --fallback model --model ./my.pt   # a local .pt file
+pannello comic.cbz --fallback model --model owner/name:weights.pt   # any HF YOLO repo
+```
+
+`general` (default) detects panels on Western and manga pages. `manga` only
+fires on manga-style ruled panels (it finds nothing on Western/European art).
+
+## How it works
+
+1. Extract the archive to a temp dir, list pages in natural order.
+2. Run kumiko per page in parallel; normalize panels to 0..1.
+3. Flag "weak" pages (no panels, or one near-full-page box) as likely failures.
+4. If `--fallback model`, re-run those pages through the model and replace the
+   result only when the model finds a better segmentation (tagged `"source":"model"`).
+
+## Benchmark
+
+`benchmark/` compares kumiko vs the model against human-labeled ground truth
+(true number of navigable panels per page). Metric: mean absolute count error
+(MAE, lower is better) and exact-count matches.
+
+Reproduce the free part (CC-BY Pepper & Carrot pages):
+
+```sh
+cd benchmark
+python3 fetch_pc.py
+../.venv/bin/python run_benchmark.py
+```
+
+| set | pages | kumiko MAE | model MAE | kumiko exact | model exact |
+|---|---|---|---|---|---|
+| Pepper & Carrot (CC-BY, reproducible) | 6 | 2.17 | 2.00 | 1/6 | 3/6 |
+| From Hell (private, numbers only) | 12 | 0.58 | 1.75 | 9/12 | 2/12 |
+| Providence Vol.1 (private, numbers only) | 12 | 0.83 | 1.50 | 7/12 | 4/12 |
+
+Only the Pepper & Carrot set is redistributable (CC-BY), so only it is
+reproducible from this repo. The From Hell / Providence numbers come from
+copyrighted books (owned in print); pages are not distributed, only the counts.
+
+Takeaways: kumiko is the better general engine, including on the "complex"
+books, because they use clear panel borders (grids, splashes) that kumiko
+handles well. The model tends to over-segment grids (From Hell) but does win
+specific pages where kumiko under-segments low-contrast colored gutters
+(e.g. Providence p.091: true 7, kumiko 4, model 7). So the model is a targeted
+fallback, not a general replacement. Panel count is a coarse proxy and labels
+are from a single human, so treat small gaps (Pepper & Carrot) as a wash.
+
+## Licensing
+
+pannello is **AGPL-3.0-or-later**. It must be, because it bundles kumiko
+(AGPL-3.0) and the optional model path depends on ultralytics (AGPL-3.0).
+
+Components and their licenses (full detail in [NOTICE](NOTICE)):
+
+| Component | Bundled? | License |
+|---|---|---|
+| kumiko (njean42/kumiko) | yes, vendored | AGPL-3.0 |
+| mosesb/best-comic-panel-detection (default model) | no, downloaded at runtime | Apache-2.0 |
+| ultralytics (model inference, `[model]` extra) | no, optional dep | AGPL-3.0 |
+| OpenCV, NumPy, Requests | no, deps | Apache-2.0 / BSD / Apache-2.0 |
+| Pepper & Carrot (benchmark pages) | no, downloaded by benchmark | CC-BY 4.0 |
+
+### Inspiration and the "did you copy code?" question
+
+pannello was inspired by the KOReader **panelreader.koplugin /
+panelzoom_integration.koplugin** (AGPL-3.0), and it emits the same on-disk JSON
+schema so the plugin can read its output.
+
+No source code was copied from that plugin. pannello is a from-scratch
+reimplementation. The only thing shared is the JSON format, which is a data
+interface (not copyrightable expression). Where the plugin bundled a fork of
+kumiko, pannello vendors the official upstream kumiko instead.
+
+### Why kumiko is vendored (not downloaded at setup)
+
+`pannello/kumiko_vendor/` is the official kumiko, pinned to one commit
+(see `kumiko_vendor/VENDOR.md`), trimmed to the runtime files. It is committed
+on purpose: it keeps `pip install` / `pipx install` self-contained, offline, and
+reproducible (kumiko is not on PyPI and has no post-install hook). Since pannello
+is already AGPL-3.0, redistributing AGPL-3.0 kumiko here is compliant. Update it
+with `tools/update_kumiko.sh [git-ref]`.

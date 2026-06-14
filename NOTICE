@@ -1,0 +1,49 @@
+pannello
+Copyright (C) 2026 pannello contributors
+
+This program is free software under the GNU Affero General Public License
+v3 or later (AGPL-3.0-or-later). See LICENSE.
+
+================================================================================
+Third-party components
+================================================================================
+
+1. kumiko ("Kumiko, the Comics Cutter")
+   - Bundled (vendored) under pannello/kumiko_vendor/.
+   - Copyright (C) 2018 njean42 and contributors.
+   - License: GNU Affero General Public License v3 (AGPL-3.0).
+   - Source: https://github.com/njean42/kumiko (pinned commit in
+     pannello/kumiko_vendor/VENDOR.md; re-vendor with tools/update_kumiko.sh).
+   - pannello vendors the official upstream kumiko unmodified, trimmed to the
+     files it imports at runtime (kumikolib.py + lib/). Because kumiko is
+     AGPL-3.0, pannello as a whole is distributed under AGPL-3.0-or-later.
+
+2. mosesb/best-comic-panel-detection  (default model for --fallback model)
+   - NOT bundled. Downloaded at runtime from the Hugging Face Hub on first use.
+   - License: Apache-2.0.
+   - Source: https://huggingface.co/mosesb/best-comic-panel-detection
+
+3. ultralytics  (optional [model] dependency; provides YOLO inference)
+   - NOT bundled. Installed only with the [model] extra.
+   - License: GNU Affero General Public License v3 (AGPL-3.0).
+   - Source: https://github.com/ultralytics/ultralytics
+
+4. OpenCV (opencv-python), NumPy, Requests
+   - Runtime dependencies, installed from PyPI. Apache-2.0 / BSD / Apache-2.0.
+
+================================================================================
+Acknowledgements (not used as code)
+================================================================================
+
+- panelreader.koplugin / panelzoom_integration.koplugin (KOReader plugin):
+  inspiration for this tool and the JSON schema pannello emits. Licensed
+  AGPL-3.0. No source code was copied from it; pannello reimplements the
+  pipeline from scratch and only matches the on-disk JSON format for
+  compatibility (a data interface, not copyrightable expression).
+
+- deepghs/manga109_yolo: evaluated during development but NOT used by default
+  (it only detects manga-style panels). Trained on the Manga109 dataset.
+
+- Benchmark data: "Pepper & Carrot" by David Revoy, CC-BY 4.0
+  (https://www.peppercarrot.com). Pages are downloaded by benchmark/fetch_pc.py,
+  not redistributed in this repository.

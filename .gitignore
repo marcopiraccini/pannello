@@ -1,0 +1,11 @@
+.venv/
+models/
+__pycache__/
+*.pyc
+build/
+dist/
+*.egg-info/
+benchmark/pages/
+benchmark/overlays/
+# generated panel JSON next to comics
+TODO/**/*.json

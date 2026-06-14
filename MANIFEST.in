@@ -1,0 +1,5 @@
+recursive-include pannello/kumiko_vendor *
+include LICENSE
+include NOTICE
+global-exclude *.pyc *.pyo
+prune **/__pycache__
