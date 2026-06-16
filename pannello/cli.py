@@ -28,12 +28,12 @@ def _process(comic, args, label=''):
     except Exception as e:
         _log(f'{label}error: {comic}: {e}')
         return False
-    extra = f'  rescued {st["rescued"]}' if args.fallback == 'model' else ''
+    extra = f'  rescued {st["rescued"]}' if st['rescued'] else ''
     _log(f'{label}{st["comic"]}: {st["pages"]} pages, {st["panels"]} panels, '
          f'weak {st["weak"]}{extra}  ({st["seconds"]:.1f}s) -> {st["out"]}')
     if st['errors']:
-        _log(f'{label}  {len(st["errors"])} page errors '
-             f'(first: page {st["errors"][0][0]} {st["errors"][0][1]})')
+        _log(f'{label}  {len(st["errors"])} page(s) kumiko could not parse '
+             f'(first: page {st["errors"][0][0]})')
     return True
 
 
@@ -64,6 +64,11 @@ def main(argv=None):
     ap.add_argument('--model-conf', type=float, default=0.25, help='model confidence threshold')
     ap.add_argument('-V', '--version', action='version', version=f'pannello {__version__}')
     args = ap.parse_args(argv)
+
+    # Specifying a model means "use it": turn on the fallback (covers pages where
+    # kumiko finds nothing or crashes).
+    if args.model is not None and args.fallback == 'none':
+        args.fallback = 'model'
 
     src = os.path.expanduser(args.input)
     if not os.path.exists(src):

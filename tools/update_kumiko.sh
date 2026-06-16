@@ -29,6 +29,12 @@ cp "$TMP/kumiko/LICENSE" "$DEST/"
 cp "$TMP/kumiko/README.md" "$DEST/"
 find "$DEST" -name '__pycache__' -type d -prune -exec rm -rf {} +
 
+# Local patch: guard self.panels.remove() against double-remove. Upstream's
+# merge/deoverlap iterates a set() of panels whose hash order varies per run, so
+# it nondeterministically throws "list.remove(x): x not in list". (upstream bug)
+sed -i -E 's/(^\s*)self\.panels\.remove\((p[0-9]*)\)/\1if \2 in self.panels: self.panels.remove(\2)/' \
+    "$DEST/lib/page.py"
+
 cat > "$DEST/VENDOR.md" <<EOF
 # Vendored kumiko
 
