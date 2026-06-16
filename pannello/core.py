@@ -175,7 +175,11 @@ def _run_fallback(pages, pages_data, weak, rtl, model_path, conf, log):
             log(f'  fallback error page {pn}: {e}')
             continue
         panels = panel_model.normalize(boxes, size)
-        if len(panels) >= 2 or (len(panels) == 1 and not is_weak(panels)):
+        # Only replace when the model finds a genuine multi-panel split. A single
+        # model box must NOT override kumiko's full-page result: on near-blank /
+        # splash pages the model often emits one spurious box, and replacing the
+        # full page with it would zoom the reader to a meaningless region.
+        if len(panels) >= 2:
             pages_data[idx]['panels'] = panels
             pages_data[idx]['source'] = 'model'
             rescued += 1
