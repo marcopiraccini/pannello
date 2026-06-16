@@ -20,7 +20,9 @@ import warnings
 os.environ.setdefault('OMP_NUM_THREADS', '4')
 
 # Quiet the "unauthenticated requests to the HF Hub / set HF_TOKEN" notice: we
-# only download a public model once, anonymous access is fine.
+# only download a public model once, anonymous access is fine. HF_HUB_VERBOSITY
+# is read by huggingface_hub at import time (a plain setLevel gets reset then).
+os.environ.setdefault('HF_HUB_VERBOSITY', 'error')
 logging.getLogger('huggingface_hub').setLevel(logging.ERROR)
 warnings.filterwarnings('ignore', message='.*unauthenticated requests.*')
 
