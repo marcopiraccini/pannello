@@ -186,8 +186,8 @@ def _run_fallback(pages, pages_data, weak, rtl, model_path, conf, log):
     return rescued
 
 
-def generate(comic, rtl=False, jobs=None, fallback='none', model_path=None,
-             model_conf=0.25, out_dir=None, limit=None, log=None):
+def generate(comic, rtl=None, jobs=None, fallback='auto', model_path=None,
+             model_conf=0.25, out_dir=None, limit=None, preview=False, log=None):
     """Generate panel JSON for one comic (archive or folder of images).
 
     Returns a stats dict. Writes <name>.json next to the comic, or into out_dir.
@@ -212,6 +212,25 @@ def generate(comic, rtl=False, jobs=None, fallback='none', model_path=None,
             pages = pages[:limit]
         if not pages:
             raise ValueError(f'no page images found in {comic}')
+
+        # Reading direction: explicit flag wins; else ComicInfo.xml; else default
+        # ltr (grayscale only hints -- never auto-flips, to avoid flipping B&W
+        # Western comics).
+        rtl_source = 'flag'
+        gray_hint = False
+        if rtl is None:
+            detected = detect_reading_direction(root)
+            if detected is not None:
+                rtl = detected == 'rtl'
+                rtl_source = 'ComicInfo.xml'
+            else:
+                rtl = False
+                rtl_source = 'default'
+                gray_hint = looks_grayscale(pages)
+
+        # KOReader reads archives in byte-sort order; warn if that differs from
+        # pannello's order (panels would misalign) -- only relevant for archives.
+        order_mismatch = (not comic.is_dir()) and koreader_order_differs(pages, root)
 
         t0 = time.time()
         pages_data, weak, errors = detect_pages(pages, rtl, jobs)
@@ -244,15 +263,111 @@ def generate(comic, rtl=False, jobs=None, fallback='none', model_path=None,
         with open(out_path, 'w', encoding='utf-8') as f:
             json.dump(result, f, ensure_ascii=False)
 
+        preview_dir = preview_sheets = None
+        if preview:
+            preview_dir, preview_sheets = render_preview(pages, pages_data, dest_dir, name, limit)
+
         return {
             'comic': name, 'out': out_path, 'pages': len(pages_data),
             'panels': sum(len(p['panels']) for p in pages_data),
             'weak': len(weak), 'rescued': rescued, 'errors': errors,
+            'reading_direction': 'rtl' if rtl else 'ltr', 'rtl_source': rtl_source,
+            'gray_hint': gray_hint, 'order_mismatch': order_mismatch,
+            'preview_dir': preview_dir, 'preview_sheets': preview_sheets,
             'seconds': time.time() - t0,
         }
     finally:
         if tmp:
             shutil.rmtree(tmp, ignore_errors=True)
+
+
+def koreader_order_differs(pages, root):
+    """True if KOReader's page order would differ from pannello's reading order.
+
+    KOReader sorts archive entries by raw byte order of their paths; pannello uses
+    a natural sort. When they disagree, panel indices misalign in KOReader and the
+    book may read out of order -- the fix is --repack.
+    """
+    rels = [str(p.relative_to(root)) for p in pages]
+    return rels != sorted(rels)
+
+
+def detect_reading_direction(root):
+    """Return 'rtl' / 'ltr' from a ComicInfo.xml <Manga> field, or None if unknown."""
+    import xml.etree.ElementTree as ET
+    for ci in Path(root).rglob('*'):
+        if ci.is_file() and ci.name.lower() == 'comicinfo.xml':
+            try:
+                for el in ET.parse(ci).getroot().iter():
+                    if el.tag.split('}')[-1].lower() == 'manga':
+                        v = (el.text or '').strip().lower()
+                        if 'righttoleft' in v or v == 'yes':
+                            return 'rtl'
+                        if v in ('no', 'unknown', ''):
+                            return 'ltr'
+            except Exception:
+                pass
+            return None
+    return None
+
+
+def looks_grayscale(pages, sample=5):
+    """Heuristic: are sampled pages essentially black-and-white (manga-like)?"""
+    try:
+        from PIL import Image
+    except ImportError:
+        return False
+    if not pages:
+        return False
+    idxs = sorted(set(min(len(pages) - 1, int((i + 1) * len(pages) / (sample + 1)))
+                      for i in range(sample)))
+    gray = n = 0
+    for i in idxs:
+        try:
+            im = Image.open(pages[i]).convert('RGB').resize((48, 48))
+            px = list(im.getdata())
+            chroma = sum(max(p) - min(p) for p in px) / len(px)
+            n += 1
+            gray += chroma < 12
+        except Exception:
+            pass
+    return n > 0 and gray / n >= 0.8
+
+
+def render_preview(pages, pages_data, dest_dir, name, limit=None):
+    """Write contact-sheet PNGs with numbered panel boxes for visual QA.
+
+    Boxes are numbered in reading order (so RTL is verifiable: panel 1 sits
+    top-right for manga). Green = kumiko, red = model-rescued. Returns (dir, sheets).
+    """
+    from PIL import Image, ImageDraw
+    pdir = dest_dir / f'{name}.preview'
+    pdir.mkdir(parents=True, exist_ok=True)
+    cols, rows, cw, ch = 4, 5, 360, 500
+    per = cols * rows
+    n = limit or len(pages)
+    sheets = 0
+    for s in range(0, n, per):
+        sheet = Image.new('RGB', (cols * cw, rows * ch), 'white')
+        sd = ImageDraw.Draw(sheet)
+        for k, idx in enumerate(range(s, min(s + per, n))):
+            im = Image.open(pages[idx]).convert('RGB')
+            W, H = im.size
+            d = ImageDraw.Draw(im)
+            model = pages_data[idx].get('source') == 'model'
+            col = (220, 0, 0) if model else (0, 140, 0)
+            for pi, p in enumerate(pages_data[idx]['panels'], 1):
+                x0, y0 = p['x'] * W, p['y'] * H
+                d.rectangle([x0, y0, (p['x'] + p['w']) * W, (p['y'] + p['h']) * H],
+                            outline=col, width=max(3, W // 250))
+                d.text((x0 + 5, y0 + 3), str(pi), fill=col)
+            im.thumbnail((cw - 8, ch - 24))
+            x, y = (k % cols) * cw, (k // cols) * ch
+            sheet.paste(im, (x + 4, y + 20))
+            sd.text((x + 5, y + 5), f'p{idx + 1}' + ('  [model]' if model else ''), fill='black')
+        sheets += 1
+        sheet.save(pdir / f'sheet_{sheets:03d}.png')
+    return pdir, sheets
 
 
 def repack(comic, out_dir=None, suffix='', log=None):

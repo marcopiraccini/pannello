@@ -20,6 +20,7 @@ dependencies = [
     "numpy",
     "opencv-python",
     "requests",
+    "pillow",
 ]
 
 [project.optional-dependencies]

@@ -75,6 +75,7 @@ pannello /path/to/library            # batch: one JSON per cbr/cbz found (recurs
 pannello comic.cbz --rtl             # manga (right-to-left reading order)
 pannello library/ -o out/            # write all JSON into out/
 pannello manga.cbz --rtl --model manga   # manga: right-to-left + manga model on weak pages
+pannello comic.cbr --preview         # also write contact sheets to inspect the panels
 pannello --help
 ```
 
@@ -103,9 +104,31 @@ Put **both** files on the device and open the `.cbz` (not the original). Repacki
 is lossless (images are copied, only renamed). Archives that are already flat and
 ordered (most comics) don't need it.
 
-Key flags: `--rtl`, `-o/--out-dir`, `-j/--jobs` (default cores-2),
-`--limit N` (first N pages, for testing), `--fallback {auto,model,none}`,
-`--model`, `--model-conf`, `-V/--version`.
+Key flags: `--rtl`/`--ltr` (force reading order), `--preview`, `-o/--out-dir`,
+`-j/--jobs` (default cores-2), `--limit N` (first N pages, for testing),
+`--fallback {auto,model,none}`, `--model`, `--model-conf`, `-V/--version`.
+
+### Reading direction
+
+pannello auto-detects reading direction: it reads the `<Manga>` field of a
+`ComicInfo.xml` inside the archive if present (`rtl` for manga), otherwise
+defaults to `ltr`. Force it with `--rtl` or `--ltr`. When there's no metadata and
+the pages look black-and-white (manga-like), it prints a hint suggesting `--rtl`
+-- it never auto-flips on color alone (that would wrongly flip B&W Western books).
+
+### Preview (`--preview`)
+
+Writes contact-sheet PNGs to `<name>.preview/` with every panel boxed and
+numbered in reading order, so you can verify detection (and that `--rtl` is
+right -- panel 1 should be top-right for manga) on your computer instead of
+round-tripping to the device. Green boxes = kumiko, red = model-rescued.
+
+### Ordering check
+
+Every run checks whether KOReader's byte-sort page order matches pannello's, and
+prints a `WARNING: KOReader will read this archive out of order` with a
+`--repack` suggestion when they differ -- so the silent misalignment described
+below is caught automatically.
 
 ### Choosing the model
 

@@ -20,17 +20,26 @@ def _process(comic, args, label=''):
         except Exception as e:
             _log(f'{label}repack failed: {comic}: {e}')
             return False
+    rtl = True if args.rtl else (False if args.ltr else None)  # None = auto-detect
     try:
         st = core.generate(
-            comic, rtl=args.rtl, jobs=args.jobs, fallback=args.fallback,
+            comic, rtl=rtl, jobs=args.jobs, fallback=args.fallback,
             model_path=args.model, model_conf=args.model_conf,
-            out_dir=args.out_dir, limit=args.limit, log=_log)
+            out_dir=args.out_dir, limit=args.limit, preview=args.preview, log=_log)
     except Exception as e:
         _log(f'{label}error: {comic}: {e}')
         return False
     extra = f'  rescued {st["rescued"]}' if st['rescued'] else ''
+    dirn = st['reading_direction'] + (' (ComicInfo)' if st['rtl_source'] == 'ComicInfo.xml' else '')
     _log(f'{label}{st["comic"]}: {st["pages"]} pages, {st["panels"]} panels, '
-         f'weak {st["weak"]}{extra}  ({st["seconds"]:.1f}s) -> {st["out"]}')
+         f'weak {st["weak"]}{extra}, {dirn}  ({st["seconds"]:.1f}s) -> {st["out"]}')
+    if st['order_mismatch']:
+        _log(f'{label}  WARNING: KOReader will read this archive out of order '
+             f'(panels misalign) -- regenerate with --repack')
+    if st['gray_hint'] and st['rtl_source'] == 'default':
+        _log(f'{label}  note: looks black-and-white/manga; add --rtl if it reads right-to-left')
+    if st['preview_dir']:
+        _log(f'{label}  preview: {st["preview_sheets"]} sheet(s) -> {st["preview_dir"]}')
     if st['errors']:
         _log(f'{label}  {len(st["errors"])} page(s) kumiko could not parse '
              f'(first: page {st["errors"][0][0]})')
@@ -49,7 +58,12 @@ def main(argv=None):
                     help='first normalize the comic to a CBZ with flat reading-order '
                          'page names (fixes books KOReader sorts wrong), then write JSON for it')
     ap.add_argument('--rtl', action='store_true',
-                    help='right-to-left reading order (manga)')
+                    help='force right-to-left reading order (manga)')
+    ap.add_argument('--ltr', action='store_true',
+                    help='force left-to-right reading order')
+    ap.add_argument('--preview', action='store_true',
+                    help='also write contact-sheet PNGs (<name>.preview/) with numbered '
+                         'panel boxes for visual QA (green=kumiko, red=model)')
     ap.add_argument('--fallback', choices=['auto', 'model', 'none'], default='auto',
                     help="model fallback for weak pages (kumiko found nothing / one "
                          "full-page box / crashed): 'auto' (default) uses the model if "
