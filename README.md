@@ -122,6 +122,8 @@ Writes contact-sheet PNGs to `<name>.preview/` with every panel boxed and
 numbered in reading order, so you can verify detection (and that `--rtl` is
 right -- panel 1 should be top-right for manga) on your computer instead of
 round-tripping to the device. Green boxes = kumiko, red = model-rescued.
+Sheets render in parallel with a `sheet k/N` progress line; use `--limit N` to
+preview only the first N pages of a big book.
 
 ### Ordering check
 

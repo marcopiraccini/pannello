@@ -265,7 +265,11 @@ def generate(comic, rtl=None, jobs=None, fallback='auto', model_path=None,
 
         preview_dir = preview_sheets = None
         if preview:
-            preview_dir, preview_sheets = render_preview(pages, pages_data, dest_dir, name, limit)
+            def _pp(done, total):
+                print(f'\r  preview: sheet {done}/{total}',
+                      end='\n' if done == total else '', file=sys.stderr, flush=True)
+            preview_dir, preview_sheets = render_preview(
+                pages, pages_data, dest_dir, name, limit, jobs, _pp)
 
         return {
             'comic': name, 'out': out_path, 'pages': len(pages_data),
@@ -334,39 +338,62 @@ def looks_grayscale(pages, sample=5):
     return n > 0 and gray / n >= 0.8
 
 
-def render_preview(pages, pages_data, dest_dir, name, limit=None):
+_PREVIEW_COLS, _PREVIEW_ROWS, _PREVIEW_CW, _PREVIEW_CH = 4, 5, 360, 500
+
+
+def _render_cell(args):
+    """Render one page to a labelled cell thumbnail (runs in a worker thread)."""
+    from PIL import Image, ImageDraw
+    idx, path, panels, model = args
+    im = Image.open(path).convert('RGB')
+    W, H = im.size
+    d = ImageDraw.Draw(im)
+    col = (220, 0, 0) if model else (0, 140, 0)
+    for pi, p in enumerate(panels, 1):
+        x0, y0 = p['x'] * W, p['y'] * H
+        d.rectangle([x0, y0, (p['x'] + p['w']) * W, (p['y'] + p['h']) * H],
+                    outline=col, width=max(3, W // 250))
+        d.text((x0 + 5, y0 + 3), str(pi), fill=col)
+    im.thumbnail((_PREVIEW_CW - 8, _PREVIEW_CH - 24))
+    return idx, im, model
+
+
+def render_preview(pages, pages_data, dest_dir, name, limit=None, jobs=None, progress=None):
     """Write contact-sheet PNGs with numbered panel boxes for visual QA.
 
     Boxes are numbered in reading order (so RTL is verifiable: panel 1 sits
-    top-right for manga). Green = kumiko, red = model-rescued. Returns (dir, sheets).
+    top-right for manga). Green = kumiko, red = model-rescued. Pages are rendered
+    in parallel across threads (PIL decode/resize release the GIL). Returns
+    (dir, sheets).
     """
     from PIL import Image, ImageDraw
+    from concurrent.futures import ThreadPoolExecutor
+    jobs = jobs or max(2, (os.cpu_count() or 2) - 2)
+    cols, rows, cw, ch = _PREVIEW_COLS, _PREVIEW_ROWS, _PREVIEW_CW, _PREVIEW_CH
+    per = cols * rows
+    n = min(limit or len(pages), len(pages))
+    total_sheets = (n + per - 1) // per
     pdir = dest_dir / f'{name}.preview'
     pdir.mkdir(parents=True, exist_ok=True)
-    cols, rows, cw, ch = 4, 5, 360, 500
-    per = cols * rows
-    n = limit or len(pages)
+
     sheets = 0
-    for s in range(0, n, per):
-        sheet = Image.new('RGB', (cols * cw, rows * ch), 'white')
-        sd = ImageDraw.Draw(sheet)
-        for k, idx in enumerate(range(s, min(s + per, n))):
-            im = Image.open(pages[idx]).convert('RGB')
-            W, H = im.size
-            d = ImageDraw.Draw(im)
-            model = pages_data[idx].get('source') == 'model'
-            col = (220, 0, 0) if model else (0, 140, 0)
-            for pi, p in enumerate(pages_data[idx]['panels'], 1):
-                x0, y0 = p['x'] * W, p['y'] * H
-                d.rectangle([x0, y0, (p['x'] + p['w']) * W, (p['y'] + p['h']) * H],
-                            outline=col, width=max(3, W // 250))
-                d.text((x0 + 5, y0 + 3), str(pi), fill=col)
-            im.thumbnail((cw - 8, ch - 24))
-            x, y = (k % cols) * cw, (k // cols) * ch
-            sheet.paste(im, (x + 4, y + 20))
-            sd.text((x + 5, y + 5), f'p{idx + 1}' + ('  [model]' if model else ''), fill='black')
-        sheets += 1
-        sheet.save(pdir / f'sheet_{sheets:03d}.png')
+    with ThreadPoolExecutor(max_workers=jobs) as ex:
+        for s in range(0, n, per):
+            batch = list(range(s, min(s + per, n)))
+            tasks = [(idx, str(pages[idx]), pages_data[idx]['panels'],
+                      pages_data[idx].get('source') == 'model') for idx in batch]
+            rendered = {idx: (im, model) for idx, im, model in ex.map(_render_cell, tasks)}
+            sheet = Image.new('RGB', (cols * cw, rows * ch), 'white')
+            sd = ImageDraw.Draw(sheet)
+            for k, idx in enumerate(batch):
+                im, model = rendered[idx]
+                x, y = (k % cols) * cw, (k // cols) * ch
+                sheet.paste(im, (x + 4, y + 20))
+                sd.text((x + 5, y + 5), f'p{idx + 1}' + ('  [model]' if model else ''), fill='black')
+            sheets += 1
+            sheet.save(pdir / f'sheet_{sheets:03d}.png')
+            if progress:
+                progress(sheets, total_sheets)
     return pdir, sheets
 
 
