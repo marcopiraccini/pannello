@@ -5,7 +5,8 @@ panel-zoom plugins. Point it at a `.cbz`/`.cbr` (or a whole folder) and it
 produces a `<comic>.json` next to each file.
 
 Panel detection uses the official [kumiko](https://github.com/njean42/kumiko)
-(vendored), with an optional CPU model fallback for pages where kumiko fails.
+(vendored), with an automatic CPU model fallback (when installed) for pages where
+kumiko fails.
 
 Licensed AGPL-3.0-or-later (see [Licensing](#licensing)).
 
@@ -73,7 +74,7 @@ pannello "My Comic.cbz"              # -> "My Comic.json" next to it
 pannello /path/to/library            # batch: one JSON per cbr/cbz found (recursive)
 pannello comic.cbz --rtl             # manga (right-to-left reading order)
 pannello library/ -o out/            # write all JSON into out/
-pannello comic.cbz --fallback model  # re-detect kumiko-failed pages with the model
+pannello manga.cbz --rtl --model manga   # manga: right-to-left + manga model on weak pages
 pannello --help
 ```
 
@@ -103,31 +104,37 @@ is lossless (images are copied, only renamed). Archives that are already flat an
 ordered (most comics) don't need it.
 
 Key flags: `--rtl`, `-o/--out-dir`, `-j/--jobs` (default cores-2),
-`--limit N` (first N pages, for testing), `--fallback {none,model}`,
+`--limit N` (first N pages, for testing), `--fallback {auto,model,none}`,
 `--model`, `--model-conf`, `-V/--version`.
 
 ### Choosing the model
 
-`--fallback model` runs a model only on pages kumiko fails on. Pick which model
-with `--model`:
+The model runs on weak pages automatically (when installed). `--model` picks
+which one:
 
 ```sh
-pannello comic.cbz --fallback model --model general   # default: Western + manga (mosesb)
-pannello manga.cbz  --fallback model --model manga --rtl   # manga-only model (manga109)
-pannello comic.cbz --fallback model --model ./my.pt   # a local .pt file
-pannello comic.cbz --fallback model --model owner/name:weights.pt   # any HF YOLO repo
+pannello comic.cbz                         # default: general (Western) model, automatic
+pannello manga.cbz --rtl --model manga     # manga model (manga109), for manga
+pannello comic.cbz --model ./my.pt         # a local .pt file
+pannello comic.cbz --model owner/name:weights.pt   # any HF YOLO repo
 ```
 
-`general` (default) detects panels on Western and manga pages. `manga` only
-fires on manga-style ruled panels (it finds nothing on Western/European art).
+`general` (default) detects panels on Western comics. `manga` only fires on
+manga-style ruled panels (it finds nothing on Western/European color art), so use
+it for manga. Passing `--model` *requires* the `[model]` extra (errors with an
+install hint if missing); the bare default degrades to kumiko-only.
+
+`--fallback`: `auto` (default) uses the model on weak pages if installed;
+`model` requires it; `none` disables it (kumiko only).
 
 ## How it works
 
 1. Extract the archive to a temp dir, list pages in natural order.
 2. Run kumiko per page in parallel; normalize panels to 0..1.
-3. Flag "weak" pages (no panels, or one near-full-page box) as likely failures.
-4. If `--fallback model`, re-run those pages through the model and replace the
-   result only when the model finds a better segmentation (tagged `"source":"model"`).
+3. Flag "weak" pages (no panels, one near-full-page box, or a kumiko crash).
+4. Re-run weak pages through the model (automatically when the `[model]` extra is
+   installed; `--fallback none` to skip), replacing kumiko's result only when the
+   model finds a better segmentation (tagged `"source":"model"`).
 
 ## Benchmark
 
