@@ -48,7 +48,12 @@ python3 -m venv .venv
 This installs the `pannello` command. The official kumiko is bundled, so there
 is nothing else to install for the base detector.
 
-### Optional model fallback
+### Model fallback (recommended)
+
+kumiko handles most pages; a model cleans up the ones it fails on ("weak" pages:
+no panels, one full-page box, or a kumiko crash). Once the `[model]` extra is
+installed, pannello uses it **automatically** on weak pages -- no flag needed.
+Without the extra, pannello runs kumiko-only and degrades quietly.
 
 CPU-only, no GPU required:
 
@@ -58,7 +63,8 @@ CPU-only, no GPU required:
 .venv/bin/pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 ```
 
-Model weights download on first use into the Hugging Face cache.
+The default fallback model is `general` (Western/general comics). Weights
+download on first use into the Hugging Face cache.
 
 ## Usage
 

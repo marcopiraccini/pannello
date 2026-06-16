@@ -50,8 +50,11 @@ def main(argv=None):
                          'page names (fixes books KOReader sorts wrong), then write JSON for it')
     ap.add_argument('--rtl', action='store_true',
                     help='right-to-left reading order (manga)')
-    ap.add_argument('--fallback', choices=['none', 'model'], default='none',
-                    help='re-detect kumiko-failed pages with the model (needs the [model] extra)')
+    ap.add_argument('--fallback', choices=['auto', 'model', 'none'], default='auto',
+                    help="model fallback for weak pages (kumiko found nothing / one "
+                         "full-page box / crashed): 'auto' (default) uses the model if "
+                         "the [model] extra is installed, else kumiko-only; 'model' "
+                         "requires it; 'none' disables it")
     ap.add_argument('-o', '--out-dir',
                     help='write JSON files here (default: next to each comic)')
     ap.add_argument('-j', '--jobs', type=int, default=None,
@@ -65,9 +68,9 @@ def main(argv=None):
     ap.add_argument('-V', '--version', action='version', version=f'pannello {__version__}')
     args = ap.parse_args(argv)
 
-    # Specifying a model means "use it": turn on the fallback (covers pages where
-    # kumiko finds nothing or crashes).
-    if args.model is not None and args.fallback == 'none':
+    # Specifying a model means "require it": surface the install hint if the
+    # [model] extra is missing instead of silently degrading.
+    if args.model is not None and args.fallback == 'auto':
         args.fallback = 'model'
 
     src = os.path.expanduser(args.input)

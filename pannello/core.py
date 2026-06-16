@@ -212,21 +212,22 @@ def generate(comic, rtl=False, jobs=None, fallback='none', model_path=None,
         t0 = time.time()
         pages_data, weak, errors = detect_pages(pages, rtl, jobs)
 
-        # Model fallback. With --fallback model, re-do every weak page. Otherwise
-        # still auto-fix pages kumiko could not parse at all (crashes), since those
-        # are total failures -- but only if the model is installed; degrade quietly.
+        # Model fallback on weak pages (kumiko found nothing / one full-page box /
+        # crashed). 'none' disables it; 'auto' uses the model if installed and
+        # degrades quietly otherwise; 'model' requires it.
         crashed = [pn for pn, _ in errors]
-        to_fix = weak if fallback == 'model' else crashed
+        to_fix = [] if fallback == 'none' else weak
         rescued = 0
         if to_fix:
             try:
                 rescued = _run_fallback(pages, pages_data, to_fix, rtl, model_path, model_conf, log)
                 weak = sorted(i + 1 for i, p in enumerate(pages_data) if is_weak(p['panels']))
             except ImportError:
-                if fallback == 'model' or model_path is not None:
+                if fallback == 'model':
                     raise  # user explicitly asked for the model; surface the install hint
-                log(f'  {len(crashed)} page(s) kumiko could not parse; install '
-                    f'"pannello[model]" to auto-fill them with the model')
+                elif crashed:
+                    log(f'  {len(crashed)} page(s) kumiko could not parse; install '
+                        f'"pannello[model]" to auto-fill them with the model')
 
         result = {
             'reading_direction': 'rtl' if rtl else 'ltr',
