@@ -233,7 +233,11 @@ def generate(comic, rtl=None, jobs=None, fallback='auto', model_path=None,
         order_mismatch = (not comic.is_dir()) and koreader_order_differs(pages, root)
 
         t0 = time.time()
-        pages_data, weak, errors = detect_pages(pages, rtl, jobs)
+
+        def _dp(done, total):
+            print(f'\r  detecting page {done}/{total}',
+                  end='\n' if done == total else '', file=sys.stderr, flush=True)
+        pages_data, weak, errors = detect_pages(pages, rtl, jobs, progress=_dp)
 
         # Model fallback on weak pages (kumiko found nothing / one full-page box /
         # crashed). 'none' disables it; 'auto' uses the model if installed and

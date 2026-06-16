@@ -14,8 +14,15 @@ NOTE: ultralytics is AGPL-3.0; installing the [model] extra brings it in.
 
 import os
 import sys
+import logging
+import warnings
 
 os.environ.setdefault('OMP_NUM_THREADS', '4')
+
+# Quiet the "unauthenticated requests to the HF Hub / set HF_TOKEN" notice: we
+# only download a public model once, anonymous access is fine.
+logging.getLogger('huggingface_hub').setLevel(logging.ERROR)
+warnings.filterwarnings('ignore', message='.*unauthenticated requests.*')
 
 DEFAULT_REPO = os.environ.get('PANNELLO_MODEL_REPO', 'mosesb/best-comic-panel-detection')
 DEFAULT_FILE = os.environ.get('PANNELLO_MODEL_FILE', 'best.pt')
