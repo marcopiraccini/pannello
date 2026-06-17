@@ -24,26 +24,41 @@ def _process(comic, args, label=''):
     try:
         st = core.generate(
             comic, rtl=rtl, jobs=args.jobs, fallback=args.fallback,
-            model_path=args.model, model_conf=args.model_conf,
-            out_dir=args.out_dir, limit=args.limit, preview=args.preview, log=_log)
+            model_path=args.model, model_conf=args.model_conf, out_dir=args.out_dir,
+            limit=args.limit, preview=args.preview, review=args.review, log=_log)
     except Exception as e:
         _log(f'{label}error: {comic}: {e}')
         return False
-    extra = f'  rescued {st["rescued"]}' if st['rescued'] else ''
     dirn = st['reading_direction'] + (' (ComicInfo)' if st['rtl_source'] == 'ComicInfo.xml' else '')
     _log(f'{label}{st["comic"]}: {st["pages"]} pages, {st["panels"]} panels, '
-         f'weak {st["weak"]}{extra}, {dirn}  ({st["seconds"]:.1f}s) -> {st["out"]}')
+         f'{dirn}  ({st["seconds"]:.1f}s) -> {st["out"]}')
     if st['order_mismatch']:
         _log(f'{label}  WARNING: KOReader will read this archive out of order '
              f'(panels misalign) -- regenerate with --repack')
     if st['gray_hint'] and st['rtl_source'] == 'default':
         _log(f'{label}  note: looks black-and-white/manga; add --rtl if it reads right-to-left')
+    _print_low_confidence(st['low_confidence'], st['pages'], label)
     if st['preview_dir']:
         _log(f'{label}  preview: {st["preview_sheets"]} sheet(s) -> {st["preview_dir"]}')
-    if st['errors']:
-        _log(f'{label}  {len(st["errors"])} page(s) kumiko could not parse '
-             f'(first: page {st["errors"][0][0]})')
+    if st.get('review_dir'):
+        _log(f'{label}  review: {len(st["low_confidence"])} page(s) -> {st["review_dir"]}')
     return True
+
+
+def _print_low_confidence(lc, total, label=''):
+    """Table of low-confidence pages: reason + how each ended up."""
+    if not lc:
+        return
+    fixed = sum(1 for x in lc if x['fixed'])
+    full = sum(1 for x in lc if x.get('fullpage'))
+    _log(f'{label}  low-confidence: {len(lc)}/{total} pages '
+         f'({fixed} fixed by model, {full} kept as full page -- review)')
+    _log(f'{label}    page  reason     result')
+    for x in lc[:20]:
+        result = f'fixed -> {x["panels"]} panels' if x['fixed'] else 'full page (review)'
+        _log(f'{label}    {x["page"]:>4}  {x["reason"]:<10} {result}')
+    if len(lc) > 20:
+        _log(f'{label}    ... +{len(lc) - 20} more')
 
 
 def main(argv=None):
@@ -64,6 +79,9 @@ def main(argv=None):
     ap.add_argument('--preview', action='store_true',
                     help='also write contact-sheet PNGs (<name>.preview/) with numbered '
                          'panel boxes for visual QA (green=kumiko, red=model)')
+    ap.add_argument('--review', action='store_true',
+                    help='write a focused contact sheet (<name>.review/) of just the '
+                         'low-confidence pages, captioned with their reason')
     ap.add_argument('--fallback', choices=['auto', 'model', 'none'], default='auto',
                     help="model fallback for weak pages (kumiko found nothing / one "
                          "full-page box / crashed): 'auto' (default) uses the model if "

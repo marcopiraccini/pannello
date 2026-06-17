@@ -130,6 +130,47 @@ def is_weak(panels):
     return False
 
 
+def detect_anomalies(panels):
+    """High-precision flags for clearly-wrong panels (calibrated to NOT fire on
+    clean grids): a sliver (extreme aspect ratio), a tiny noise panel, or two
+    panels overlapping (a kumiko de-overlap bug). Returns a sorted list of tags.
+
+    Note: this does NOT catch borderless grid-over-segmentation (normal-aspect
+    cells) -- no cheap high-precision signal exists for that.
+    """
+    flags = set()
+    for p in panels:
+        w, h = p['w'], p['h']
+        if w > 0 and h > 0 and max(w / h, h / w) >= 10:
+            flags.add('sliver')
+        if w * h < 0.005:
+            flags.add('tiny')
+    for i, a in enumerate(panels):
+        for b in panels[i + 1:]:
+            ix = max(0.0, min(a['x'] + a['w'], b['x'] + b['w']) - max(a['x'], b['x']))
+            iy = max(0.0, min(a['y'] + a['h'], b['y'] + b['h']) - max(a['y'], b['y']))
+            if ix * iy > 0.05 * min(a['w'] * a['h'], b['w'] * b['h']):
+                flags.add('overlap')
+    return sorted(flags)
+
+
+def page_issue(panels, crashed=False):
+    """Unified 'kumiko probably got this page wrong' reason, or None.
+
+    One concept ("low confidence") with a reason: under-detection
+    (crash / empty / full_page) or an anomaly (sliver / overlap / tiny). The model
+    is tried on all of them; the reason just tells the user what looked off.
+    """
+    if crashed:
+        return 'crash'
+    if not panels:
+        return 'empty'
+    if len(panels) == 1 and panels[0]['w'] * panels[0]['h'] >= WEAK_FULLPAGE_AREA:
+        return 'full_page'
+    anomalies = detect_anomalies(panels)
+    return anomalies[0] if anomalies else None
+
+
 def _worker(args):
     idx, image_path, rtl = args
     try:
@@ -161,6 +202,63 @@ def detect_pages(pages, rtl, jobs, progress=None):
     return pages_data, weak, errors
 
 
+def deoverlap(panels):
+    """Clip overlapping panels apart so the output is strictly disjoint. Each
+    overlapping pair is split along the thinner overlap dimension at the overlap
+    midpoint (the two panels then meet edge-to-edge -- no overlap, no gap).
+    A reader must never get overlapping zoom regions.
+    """
+    p = [dict(q) for q in panels]
+    for _ in range(50):
+        moved = False
+        for i in range(len(p)):
+            for j in range(i + 1, len(p)):
+                a, b = p[i], p[j]
+                ox = min(a['x'] + a['w'], b['x'] + b['w']) - max(a['x'], b['x'])
+                oy = min(a['y'] + a['h'], b['y'] + b['h']) - max(a['y'], b['y'])
+                if ox <= 1e-4 or oy <= 1e-4:
+                    continue
+                if ox <= oy:  # thinner overlap is horizontal -> split in x
+                    mid = (max(a['x'], b['x']) + min(a['x'] + a['w'], b['x'] + b['w'])) / 2
+                    left, right = (a, b) if a['x'] <= b['x'] else (b, a)
+                    left['w'] = mid - left['x']
+                    right['w'] = right['x'] + right['w'] - mid
+                    right['x'] = mid
+                else:  # split in y
+                    mid = (max(a['y'], b['y']) + min(a['y'] + a['h'], b['y'] + b['h'])) / 2
+                    top, bot = (a, b) if a['y'] <= b['y'] else (b, a)
+                    top['h'] = mid - top['y']
+                    bot['h'] = bot['y'] + bot['h'] - mid
+                    bot['y'] = mid
+                moved = True
+        if not moved:
+            break
+    return [{k: round(v, 4) for k, v in q.items()} for q in p]
+
+
+def expand_to_page(panels):
+    """Grow panels to meet their neighbours / the page edges so they tile the whole
+    page with no gaps (what kumiko does, but the model doesn't). A region the model
+    missed gets absorbed into an adjacent, larger panel -- still reachable, never
+    lost. Facing panels meet at the gutter midpoint, so no new overlaps appear.
+    """
+    eps = 0.01
+    b = [[p['x'], p['y'], p['x'] + p['w'], p['y'] + p['h']] for p in panels]
+    out = []
+    for i, (x0, y0, x1, y1) in enumerate(b):
+        rights = [o[0] for j, o in enumerate(b) if j != i and o[0] >= x1 - eps and o[3] > y0 and o[1] < y1]
+        lefts = [o[2] for j, o in enumerate(b) if j != i and o[2] <= x0 + eps and o[3] > y0 and o[1] < y1]
+        downs = [o[1] for j, o in enumerate(b) if j != i and o[1] >= y1 - eps and o[2] > x0 and o[0] < x1]
+        ups = [o[3] for j, o in enumerate(b) if j != i and o[3] <= y0 + eps and o[2] > x0 and o[0] < x1]
+        nx0 = (x0 + max(lefts)) / 2 if lefts else 0.0
+        nx1 = (x1 + min(rights)) / 2 if rights else 1.0
+        ny0 = (y0 + max(ups)) / 2 if ups else 0.0
+        ny1 = (y1 + min(downs)) / 2 if downs else 1.0
+        out.append({'x': round(nx0, 4), 'y': round(ny0, 4),
+                    'w': round(nx1 - nx0, 4), 'h': round(ny1 - ny0, 4)})
+    return out
+
+
 def _run_fallback(pages, pages_data, weak, rtl, model_path, conf, log):
     """Re-detect weak pages with the model. Returns count of pages rescued."""
     from . import model as panel_model
@@ -175,19 +273,23 @@ def _run_fallback(pages, pages_data, weak, rtl, model_path, conf, log):
             log(f'  fallback error page {pn}: {e}')
             continue
         panels = panel_model.normalize(boxes, size)
-        # Only replace when the model finds a genuine multi-panel split. A single
-        # model box must NOT override kumiko's full-page result: on near-blank /
-        # splash pages the model often emits one spurious box, and replacing the
-        # full page with it would zoom the reader to a meaningless region.
-        if len(panels) >= 2:
-            pages_data[idx]['panels'] = panels
-            pages_data[idx]['source'] = 'model'
-            rescued += 1
+        # Apply the model only when its result is CLEAN: >=2 panels and no anomalies
+        # of its own. For a panel-zoom reader an over-large panel is harmless (you
+        # just see extra context) but a fragment breaks reading -- so a clean result
+        # with FEWER, bigger panels is fine (it fixes over-segmentation / overlaps),
+        # while the model's own overlapping/sliver junk (over-segmentation) is
+        # rejected, keeping kumiko's safer result.
+        if len(panels) >= 2 and not detect_anomalies(panels):
+            panels = expand_to_page(panels)  # tile the page so no region is lost
+            if not detect_anomalies(panels):  # guard: expansion must not create overlaps
+                pages_data[idx]['panels'] = panels
+                pages_data[idx]['source'] = 'model'
+                rescued += 1
     return rescued
 
 
 def generate(comic, rtl=None, jobs=None, fallback='auto', model_path=None,
-             model_conf=0.25, out_dir=None, limit=None, preview=False, log=None):
+             model_conf=0.25, out_dir=None, limit=None, preview=False, review=False, log=None):
     """Generate panel JSON for one comic (archive or folder of images).
 
     Returns a stats dict. Writes <name>.json next to the comic, or into out_dir.
@@ -237,24 +339,55 @@ def generate(comic, rtl=None, jobs=None, fallback='auto', model_path=None,
         def _dp(done, total):
             print(f'\r  detecting page {done}/{total}',
                   end='\n' if done == total else '', file=sys.stderr, flush=True)
-        pages_data, weak, errors = detect_pages(pages, rtl, jobs, progress=_dp)
+        pages_data, _weak, errors = detect_pages(pages, rtl, jobs, progress=_dp)
 
-        # Model fallback on weak pages (kumiko found nothing / one full-page box /
-        # crashed). 'none' disables it; 'auto' uses the model if installed and
-        # degrades quietly otherwise; 'model' requires it.
-        crashed = [pn for pn, _ in errors]
-        to_fix = [] if fallback == 'none' else weak
-        rescued = 0
+        # Unified "low-confidence" classification: any page kumiko probably got
+        # wrong (under-detection: crash/empty/full_page; or anomaly: sliver/
+        # overlap/tiny).
+        crashed = {pn for pn, _ in errors}
+        issues = {}
+        for pd in pages_data:
+            r = page_issue(pd['panels'], pd['page'] in crashed)
+            if r:
+                issues[pd['page']] = r
+
+        # Try to fix EVERY low-confidence page with the model (replaces kumiko only
+        # when the model returns a cleaner multi-panel result). 'none' disables it,
+        # 'auto' degrades quietly if the [model] extra is missing, 'model' requires it.
+        to_fix = [] if fallback == 'none' else sorted(issues)
         if to_fix:
             try:
-                rescued = _run_fallback(pages, pages_data, to_fix, rtl, model_path, model_conf, log)
-                weak = sorted(i + 1 for i, p in enumerate(pages_data) if is_weak(p['panels']))
+                _run_fallback(pages, pages_data, to_fix, rtl, model_path, model_conf, log)
             except ImportError:
                 if fallback == 'model':
                     raise  # user explicitly asked for the model; surface the install hint
-                elif crashed:
-                    log(f'  {len(crashed)} page(s) kumiko could not parse; install '
+                elif any(r == 'crash' for r in issues.values()):
+                    n = sum(1 for r in issues.values() if r == 'crash')
+                    log(f'  {n} page(s) kumiko could not parse; install '
                         f'"pannello[model]" to auto-fill them with the model')
+
+        # Any low-confidence page the model didn't cleanly fix: collapse to a SINGLE
+        # full-page panel. A reader can always pan/zoom one big panel and read the
+        # whole page; kumiko's wrong/partial boundaries on these pages produce bad
+        # zoom (and no post-processing turns wrong boundaries into right ones). The
+        # page stays listed for review so you can refine it by hand if you want.
+        for pn in issues:
+            pd = pages_data[pn - 1]
+            if pd.get('source') != 'model':
+                pd['panels'] = [{'x': 0.0, 'y': 0.0, 'w': 1.0, 'h': 1.0}]
+                pd['source'] = 'fullpage'
+
+        # Final report: each low-confidence page, its reason, and how it ended up.
+        # NOT written into the panel JSON (that stays the KOReader contract).
+        low_confidence = []
+        for pn, reason in sorted(issues.items()):
+            pd = pages_data[pn - 1]
+            low_confidence.append({
+                'page': pn, 'reason': reason,
+                'fixed': pd.get('source') == 'model',
+                'fullpage': pd.get('source') == 'fullpage',
+                'panels': len(pd['panels']),
+            })
 
         result = {
             'reading_direction': 'rtl' if rtl else 'ltr',
@@ -275,13 +408,24 @@ def generate(comic, rtl=None, jobs=None, fallback='auto', model_path=None,
             preview_dir, preview_sheets = render_preview(
                 pages, pages_data, dest_dir, name, limit, jobs, _pp)
 
+        # --review: a focused contact sheet of just the low-confidence pages,
+        # each captioned with its reason (+ "fixed" when the model replaced it).
+        review_dir = None
+        if review and low_confidence:
+            idxs = [x['page'] - 1 for x in low_confidence]
+            notes = {x['page'] - 1: x['reason'] + (' fixed' if x['fixed'] else '')
+                     for x in low_confidence}
+            review_dir, _ = render_preview(pages, pages_data, dest_dir, name,
+                                           jobs=jobs, indices=idxs, notes=notes, suffix='review')
+
         return {
             'comic': name, 'out': out_path, 'pages': len(pages_data),
             'panels': sum(len(p['panels']) for p in pages_data),
-            'weak': len(weak), 'rescued': rescued, 'errors': errors,
+            'low_confidence': low_confidence, 'errors': errors,
             'reading_direction': 'rtl' if rtl else 'ltr', 'rtl_source': rtl_source,
             'gray_hint': gray_hint, 'order_mismatch': order_mismatch,
             'preview_dir': preview_dir, 'preview_sheets': preview_sheets,
+            'review_dir': review_dir,
             'seconds': time.time() - t0,
         }
     finally:
@@ -362,28 +506,32 @@ def _render_cell(args):
     return idx, im, model
 
 
-def render_preview(pages, pages_data, dest_dir, name, limit=None, jobs=None, progress=None):
+def render_preview(pages, pages_data, dest_dir, name, limit=None, jobs=None,
+                   progress=None, indices=None, notes=None, suffix='preview'):
     """Write contact-sheet PNGs with numbered panel boxes for visual QA.
 
     Boxes are numbered in reading order (so RTL is verifiable: panel 1 sits
-    top-right for manga). Green = kumiko, red = model-rescued. Pages are rendered
-    in parallel across threads (PIL decode/resize release the GIL). Returns
-    (dir, sheets).
+    top-right for manga). Green = kumiko, red = model-rescued. Pages render in
+    parallel across threads (PIL decode/resize release the GIL).
+
+    `indices` renders only those page indices (e.g. the low-confidence ones for
+    --review); `notes` is an {index: label} dict appended to each cell caption;
+    `suffix` names the output dir (<name>.<suffix>/). Returns (dir, sheets).
     """
     from PIL import Image, ImageDraw
     from concurrent.futures import ThreadPoolExecutor
     jobs = jobs or max(2, (os.cpu_count() or 2) - 2)
     cols, rows, cw, ch = _PREVIEW_COLS, _PREVIEW_ROWS, _PREVIEW_CW, _PREVIEW_CH
     per = cols * rows
-    n = min(limit or len(pages), len(pages))
-    total_sheets = (n + per - 1) // per
-    pdir = dest_dir / f'{name}.preview'
+    idx_list = indices if indices is not None else list(range(min(limit or len(pages), len(pages))))
+    total_sheets = (len(idx_list) + per - 1) // per
+    pdir = dest_dir / f'{name}.{suffix}'
     pdir.mkdir(parents=True, exist_ok=True)
 
     sheets = 0
     with ThreadPoolExecutor(max_workers=jobs) as ex:
-        for s in range(0, n, per):
-            batch = list(range(s, min(s + per, n)))
+        for s in range(0, len(idx_list), per):
+            batch = idx_list[s:s + per]
             tasks = [(idx, str(pages[idx]), pages_data[idx]['panels'],
                       pages_data[idx].get('source') == 'model') for idx in batch]
             rendered = {idx: (im, model) for idx, im, model in ex.map(_render_cell, tasks)}
@@ -393,7 +541,9 @@ def render_preview(pages, pages_data, dest_dir, name, limit=None, jobs=None, pro
                 im, model = rendered[idx]
                 x, y = (k % cols) * cw, (k // cols) * ch
                 sheet.paste(im, (x + 4, y + 20))
-                sd.text((x + 5, y + 5), f'p{idx + 1}' + ('  [model]' if model else ''), fill='black')
+                cap = f'p{idx + 1}'
+                cap += f'  {notes[idx]}' if notes and idx in notes else ('  [model]' if model else '')
+                sd.text((x + 5, y + 5), cap, fill='black')
             sheets += 1
             sheet.save(pdir / f'sheet_{sheets:03d}.png')
             if progress:

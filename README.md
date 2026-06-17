@@ -51,10 +51,10 @@ is nothing else to install for the base detector.
 
 ### Model fallback (recommended)
 
-kumiko handles most pages; a model cleans up the ones it fails on ("weak" pages:
-no panels, one full-page box, or a kumiko crash). Once the `[model]` extra is
-installed, pannello uses it **automatically** on weak pages -- no flag needed.
-Without the extra, pannello runs kumiko-only and degrades quietly.
+kumiko handles most pages; a model cleans up the **low-confidence** ones (see
+below). Once the `[model]` extra is installed, pannello tries it **automatically**
+on those pages -- no flag needed. Without the extra, pannello runs kumiko-only and
+degrades quietly.
 
 CPU-only, no GPU required:
 
@@ -74,7 +74,7 @@ pannello "My Comic.cbz"              # -> "My Comic.json" next to it
 pannello /path/to/library            # batch: one JSON per cbr/cbz found (recursive)
 pannello comic.cbz --rtl             # manga (right-to-left reading order)
 pannello library/ -o out/            # write all JSON into out/
-pannello manga.cbz --rtl --model manga   # manga: right-to-left + manga model on weak pages
+pannello manga.cbz --rtl --model manga   # manga: right-to-left + manga model
 pannello comic.cbr --preview         # also write contact sheets to inspect the panels
 pannello --help
 ```
@@ -104,9 +104,9 @@ Put **both** files on the device and open the `.cbz` (not the original). Repacki
 is lossless (images are copied, only renamed). Archives that are already flat and
 ordered (most comics) don't need it.
 
-Key flags: `--rtl`/`--ltr` (force reading order), `--preview`, `-o/--out-dir`,
-`-j/--jobs` (default cores-2), `--limit N` (first N pages, for testing),
-`--fallback {auto,model,none}`, `--model`, `--model-conf`, `-V/--version`.
+Key flags: `--rtl`/`--ltr` (force reading order), `--preview`, `--review`,
+`-o/--out-dir`, `-j/--jobs` (default cores-2), `--limit N` (first N pages, for
+testing), `--fallback {auto,model,none}`, `--model`, `--model-conf`, `-V/--version`.
 
 ### Reading direction
 
@@ -132,9 +132,33 @@ prints a `WARNING: KOReader will read this archive out of order` with a
 `--repack` suggestion when they differ -- so the silent misalignment described
 below is caught automatically.
 
+### Low-confidence pages
+
+Every run classifies pages kumiko probably got wrong into one concept,
+**low-confidence**, each with a reason:
+
+- under-detection: `crash`, `empty`, `full_page` (one near-full-page box)
+- anomaly: `sliver` (extreme aspect), `overlap`, `tiny` (noise panel)
+
+pannello **tries the model on all of them** (it replaces kumiko only when the
+model returns a cleaner multi-panel result), then prints a table:
+
+```
+  low-confidence: 2/200 pages (0 fixed by model, 2 to review)
+    page  reason     result
+       2  full_page  review
+     128  overlap    review
+```
+
+This is print-only -- the panel JSON stays clean (just the KOReader fields). The
+anomaly checks are tuned for high precision (they don't fire on clean grids); they
+catch genuine anomalies, not borderless grid-over-segmentation, which has no cheap
+reliable signal. Use `--review` to also write a focused contact sheet
+(`<name>.review/`) of just the low-confidence pages, captioned with their reason.
+
 ### Choosing the model
 
-The model runs on weak pages automatically (when installed). `--model` picks
+The model runs on low-confidence pages automatically (when installed). `--model` picks
 which one:
 
 ```sh
@@ -149,17 +173,18 @@ manga-style ruled panels (it finds nothing on Western/European color art), so us
 it for manga. Passing `--model` *requires* the `[model]` extra (errors with an
 install hint if missing); the bare default degrades to kumiko-only.
 
-`--fallback`: `auto` (default) uses the model on weak pages if installed;
+`--fallback`: `auto` (default) uses the model on low-confidence pages if installed;
 `model` requires it; `none` disables it (kumiko only).
 
 ## How it works
 
 1. Extract the archive to a temp dir, list pages in natural order.
 2. Run kumiko per page in parallel; normalize panels to 0..1.
-3. Flag "weak" pages (no panels, one near-full-page box, or a kumiko crash).
-4. Re-run weak pages through the model (automatically when the `[model]` extra is
-   installed; `--fallback none` to skip), replacing kumiko's result only when the
-   model finds a better segmentation (tagged `"source":"model"`).
+3. Classify each page as `low-confidence` (with a reason) or fine -- see
+   [Low-confidence pages](#low-confidence-pages).
+4. Try the model on every low-confidence page (automatically when the `[model]`
+   extra is installed; `--fallback none` to skip), replacing kumiko's result only
+   when the model returns a cleaner multi-panel result; print the table.
 
 ## Benchmark
 
