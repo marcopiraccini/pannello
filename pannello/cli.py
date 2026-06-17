@@ -50,12 +50,16 @@ def _print_low_confidence(lc, total, label=''):
     if not lc:
         return
     fixed = sum(1 for x in lc if x['fixed'])
-    full = sum(1 for x in lc if x.get('fullpage'))
     _log(f'{label}  low-confidence: {len(lc)}/{total} pages '
-         f'({fixed} fixed by model, {full} kept as full page -- review)')
+         f'({fixed} fixed by model, {len(lc) - fixed} to review)')
     _log(f'{label}    page  reason     result')
     for x in lc[:20]:
-        result = f'fixed -> {x["panels"]} panels' if x['fixed'] else 'full page (review)'
+        if x['fixed']:
+            result = f'fixed -> {x["panels"]} panels (model)'
+        elif x.get('fullpage'):
+            result = 'full page'
+        else:
+            result = f'tiled -> {x["panels"]} panels'
         _log(f'{label}    {x["page"]:>4}  {x["reason"]:<10} {result}')
     if len(lc) > 20:
         _log(f'{label}    ... +{len(lc) - 20} more')

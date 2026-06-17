@@ -22,6 +22,7 @@ import shutil
 import zipfile
 import tempfile
 import subprocess
+import numpy as np
 from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
@@ -165,10 +166,18 @@ def page_issue(panels, crashed=False):
         return 'crash'
     if not panels:
         return 'empty'
-    if len(panels) == 1 and panels[0]['w'] * panels[0]['h'] >= WEAK_FULLPAGE_AREA:
+    if len(panels) == 1:
+        # A lone panel: the whole page should be that one panel. If it doesn't
+        # cover the page (kumiko boxed just an illustration, leaving a title/credits
+        # strip), the model gets a chance to find a real split; otherwise it
+        # collapses to a true full-page so no strip is left unreachable.
         return 'full_page'
     anomalies = detect_anomalies(panels)
-    return anomalies[0] if anomalies else None
+    if anomalies:
+        return anomalies[0]
+    if has_hole(panels):
+        return 'hole'  # a region of the page is uncovered -> let the model try
+    return None
 
 
 def _worker(args):
@@ -236,13 +245,49 @@ def deoverlap(panels):
     return [{k: round(v, 4) for k, v in q.items()} for q in p]
 
 
+def content_bbox(panels):
+    """Bounding box (x0, y0, x1, y1) of all panels -- the comic content area
+    (page margins lie outside it)."""
+    return (min(p['x'] for p in panels), min(p['y'] for p in panels),
+            max(p['x'] + p['w'] for p in panels), max(p['y'] + p['h'] for p in panels))
+
+
+def covered_fraction(panels):
+    """Fraction of the content bbox covered by panels (coarse raster; overlap-safe)."""
+    if len(panels) < 2:
+        return 1.0
+    bx0, by0, bx1, by1 = content_bbox(panels)
+    bw, bh = bx1 - bx0, by1 - by0
+    if bw <= 0 or bh <= 0:
+        return 1.0
+    N = 64
+    grid = np.zeros((N, N), dtype=bool)
+    for p in panels:
+        cx0 = max(0, int((p['x'] - bx0) / bw * N))
+        cx1 = min(N, int(round((p['x'] + p['w'] - bx0) / bw * N)))
+        cy0 = max(0, int((p['y'] - by0) / bh * N))
+        cy1 = min(N, int(round((p['y'] + p['h'] - by0) / bh * N)))
+        grid[cy0:cy1, cx0:cx1] = True
+    return float(grid.mean())
+
+
+def has_hole(panels):
+    """True if a multi-panel page leaves a sizeable uncovered region inside its
+    content bbox (a real hole, not thin gutters)."""
+    return len(panels) >= 2 and covered_fraction(panels) < 0.85
+
+
 def expand_to_page(panels):
-    """Grow panels to meet their neighbours / the page edges so they tile the whole
-    page with no gaps (what kumiko does, but the model doesn't). A region the model
-    missed gets absorbed into an adjacent, larger panel -- still reachable, never
-    lost. Facing panels meet at the gutter midpoint, so no new overlaps appear.
+    """Grow panels to meet their neighbours / the content-bbox edges so they tile
+    the comic area with no gaps (what kumiko does, but the model doesn't), leaving
+    page margins out. A missed region gets absorbed into an adjacent, larger panel
+    -- reachable, never lost. Facing panels meet at the gutter midpoint -> no new
+    overlaps.
     """
+    if len(panels) < 2:
+        return panels
     eps = 0.01
+    bx0, by0, bx1, by1 = content_bbox(panels)
     b = [[p['x'], p['y'], p['x'] + p['w'], p['y'] + p['h']] for p in panels]
     out = []
     for i, (x0, y0, x1, y1) in enumerate(b):
@@ -250,10 +295,10 @@ def expand_to_page(panels):
         lefts = [o[2] for j, o in enumerate(b) if j != i and o[2] <= x0 + eps and o[3] > y0 and o[1] < y1]
         downs = [o[1] for j, o in enumerate(b) if j != i and o[1] >= y1 - eps and o[2] > x0 and o[0] < x1]
         ups = [o[3] for j, o in enumerate(b) if j != i and o[3] <= y0 + eps and o[2] > x0 and o[0] < x1]
-        nx0 = (x0 + max(lefts)) / 2 if lefts else 0.0
-        nx1 = (x1 + min(rights)) / 2 if rights else 1.0
-        ny0 = (y0 + max(ups)) / 2 if ups else 0.0
-        ny1 = (y1 + min(downs)) / 2 if downs else 1.0
+        nx0 = (x0 + max(lefts)) / 2 if lefts else bx0
+        nx1 = (x1 + min(rights)) / 2 if rights else bx1
+        ny0 = (y0 + max(ups)) / 2 if ups else by0
+        ny1 = (y1 + min(downs)) / 2 if downs else by1
         out.append({'x': round(nx0, 4), 'y': round(ny0, 4),
                     'w': round(nx1 - nx0, 4), 'h': round(ny1 - ny0, 4)})
     return out
@@ -273,19 +318,28 @@ def _run_fallback(pages, pages_data, weak, rtl, model_path, conf, log):
             log(f'  fallback error page {pn}: {e}')
             continue
         panels = panel_model.normalize(boxes, size)
-        # Apply the model only when its result is CLEAN: >=2 panels and no anomalies
-        # of its own. For a panel-zoom reader an over-large panel is harmless (you
-        # just see extra context) but a fragment breaks reading -- so a clean result
-        # with FEWER, bigger panels is fine (it fixes over-segmentation / overlaps),
-        # while the model's own overlapping/sliver junk (over-segmentation) is
-        # rejected, keeping kumiko's safer result.
-        if len(panels) >= 2 and not detect_anomalies(panels):
-            panels = expand_to_page(panels)  # tile the page so no region is lost
-            if not detect_anomalies(panels):  # guard: expansion must not create overlaps
-                pages_data[idx]['panels'] = panels
-                pages_data[idx]['source'] = 'model'
-                rescued += 1
+        # Apply the model only when its result is CLEAN (>=2 panels, no anomalies of
+        # its own) AND it covers the same content extent as kumiko (its bounding box
+        # isn't smaller -- otherwise the model dropped a whole region, e.g. a column,
+        # which would be lost). Final tiling fills any internal gaps afterwards.
+        kp = pages_data[idx]['panels']
+        if len(panels) >= 2 and not detect_anomalies(panels) and not _loses_extent(panels, kp):
+            pages_data[idx]['panels'] = panels
+            pages_data[idx]['source'] = 'model'
+            rescued += 1
     return rescued
+
+
+def _loses_extent(model_panels, kumiko_panels):
+    """True if the model's content area is meaningfully smaller than kumiko's
+    (it dropped a region kumiko had). Compares bounding-box areas."""
+    if not kumiko_panels:
+        return False
+    mx0, my0, mx1, my1 = content_bbox(model_panels)
+    kx0, ky0, kx1, ky1 = content_bbox(kumiko_panels)
+    m = (mx1 - mx0) * (my1 - my0)
+    k = (kx1 - kx0) * (ky1 - ky0)
+    return k > 0 and m < 0.9 * k
 
 
 def generate(comic, rtl=None, jobs=None, fallback='auto', model_path=None,
@@ -366,16 +420,34 @@ def generate(comic, rtl=None, jobs=None, fallback='auto', model_path=None,
                     log(f'  {n} page(s) kumiko could not parse; install '
                         f'"pannello[model]" to auto-fill them with the model')
 
-        # Any low-confidence page the model didn't cleanly fix: collapse to a SINGLE
-        # full-page panel. A reader can always pan/zoom one big panel and read the
-        # whole page; kumiko's wrong/partial boundaries on these pages produce bad
-        # zoom (and no post-processing turns wrong boundaries into right ones). The
-        # page stays listed for review so you can refine it by hand if you want.
-        for pn in issues:
+        # A lone-panel page the model couldn't split into a real grid: collapse to
+        # a SINGLE full-page panel (cover the whole page -- never leave a strip
+        # unreachable, and never ship wrong/partial boundaries).
+        for pn, reason in issues.items():
             pd = pages_data[pn - 1]
-            if pd.get('source') != 'model':
+            if reason == 'full_page' and pd.get('source') != 'model':
                 pd['panels'] = [{'x': 0.0, 'y': 0.0, 'w': 1.0, 'h': 1.0}]
                 pd['source'] = 'fullpage'
+
+        # Coverage guarantee: every multi-panel page must tile its content area
+        # (panels cover the whole page minus margins -- no holes, no gutter gaps).
+        # Expand panels to fill, then clip any overlap that creates.
+        for pd in pages_data:
+            if len(pd['panels']) >= 2:
+                tiled = expand_to_page(pd['panels'])
+                if detect_anomalies(tiled):
+                    tiled = deoverlap(tiled)
+                pd['panels'] = tiled
+
+        # Safety net: the shipped result must be EITHER a clean tiling OR the whole
+        # page. Any page still anomalous, or whose panels cover too little of the
+        # page (a detector missed a big region), collapses to one full-page panel.
+        for pd in pages_data:
+            ps = pd['panels']
+            if len(ps) >= 2 and (detect_anomalies(ps) or sum(p['w'] * p['h'] for p in ps) < 0.7):
+                pd['panels'] = [{'x': 0.0, 'y': 0.0, 'w': 1.0, 'h': 1.0}]
+                pd['source'] = 'fullpage'
+                issues.setdefault(pd['page'], 'coverage')
 
         # Final report: each low-confidence page, its reason, and how it ended up.
         # NOT written into the panel JSON (that stays the KOReader contract).
