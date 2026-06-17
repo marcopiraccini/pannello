@@ -132,29 +132,44 @@ prints a `WARNING: KOReader will read this archive out of order` with a
 `--repack` suggestion when they differ -- so the silent misalignment described
 below is caught automatically.
 
-### Low-confidence pages
+### Low-confidence pages and the coverage guarantee
 
 Every run classifies pages kumiko probably got wrong into one concept,
 **low-confidence**, each with a reason:
 
-- under-detection: `crash`, `empty`, `full_page` (one near-full-page box)
+- under-detection: `crash`, `empty`, `full_page` (a lone panel)
 - anomaly: `sliver` (extreme aspect), `overlap`, `tiny` (noise panel)
+- `hole` (panels leave a region of the page uncovered)
 
-pannello **tries the model on all of them** (it replaces kumiko only when the
-model returns a cleaner multi-panel result), then prints a table:
+pannello tries the model on all of them, then guarantees the result shipped for
+**every** page is one of two safe shapes:
+
+- a **clean panel tiling** -- panels cover the whole page minus margins, with no
+  overlaps, slivers, holes, or gutter gaps; or
+- a **single full-page panel** -- whenever a confident clean tiling isn't possible.
+
+The reasoning: a reader can always pan/zoom an over-large panel, but a wrong cut,
+an overlapping region, or a lost strip breaks reading -- so when in doubt pannello
+shows the whole page. It then prints a table:
 
 ```
-  low-confidence: 2/200 pages (0 fixed by model, 2 to review)
+  low-confidence: 5/60 pages (1 fixed by model, 4 to review)
     page  reason     result
-       2  full_page  review
-     128  overlap    review
+       1  full_page  full page
+       9  full_page  fixed -> 5 panels (model)
+      24  overlap    tiled -> 4 panels
 ```
 
-This is print-only -- the panel JSON stays clean (just the KOReader fields). The
-anomaly checks are tuned for high precision (they don't fire on clean grids); they
-catch genuine anomalies, not borderless grid-over-segmentation, which has no cheap
-reliable signal. Use `--review` to also write a focused contact sheet
-(`<name>.review/`) of just the low-confidence pages, captioned with their reason.
+`fixed` = the model produced a clean multi-panel split; `tiled` = kumiko's panels,
+cleaned and expanded to cover the page; `full page` = collapsed to one panel.
+The table is print-only -- the panel JSON stays clean (just the KOReader fields).
+Use `--review` to also write a focused contact sheet (`<name>.review/`) of just the
+low-confidence pages, captioned with their reason.
+
+This trades per-panel zoom for safety on pages no detector handles well (dense /
+borderless art): they become "whole page, pan it" rather than wrong cuts. Note one
+case it can't catch: a splash kumiko splits into a couple of clean full-width bands
+is indistinguishable from a real stacked-panel page, so it ships as-is.
 
 ### Choosing the model
 
@@ -180,11 +195,13 @@ install hint if missing); the bare default degrades to kumiko-only.
 
 1. Extract the archive to a temp dir, list pages in natural order.
 2. Run kumiko per page in parallel; normalize panels to 0..1.
-3. Classify each page as `low-confidence` (with a reason) or fine -- see
-   [Low-confidence pages](#low-confidence-pages).
-4. Try the model on every low-confidence page (automatically when the `[model]`
-   extra is installed; `--fallback none` to skip), replacing kumiko's result only
-   when the model returns a cleaner multi-panel result; print the table.
+3. Classify each page (see [Low-confidence pages](#low-confidence-pages-and-the-coverage-guarantee)).
+4. Try the model on every low-confidence page (auto when the `[model]` extra is
+   installed; `--fallback none` to skip); apply its result only if it's clean and
+   doesn't drop content extent.
+5. Coverage guarantee: a lone panel becomes the full page; multi-panel pages are
+   expanded to tile the content area (margins excluded); anything still anomalous
+   or covering too little of the page collapses to a single full-page panel.
 
 ## Benchmark
 
