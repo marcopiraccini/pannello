@@ -16,7 +16,7 @@ def _log(msg):
 def _process(comic, args, label=''):
     if args.repack:
         try:
-            comic, _ = core.repack(comic, out_dir=args.out_dir, log=_log)
+            comic, _ = core.repack(comic, out_dir=args.out_dir, dpi=args.dpi, log=_log)
         except Exception as e:
             _log(f'{label}repack failed: {comic}: {e}')
             return False
@@ -25,7 +25,7 @@ def _process(comic, args, label=''):
         st = core.generate(
             comic, rtl=rtl, jobs=args.jobs, fallback=args.fallback,
             model_path=args.model, model_conf=args.model_conf, out_dir=args.out_dir,
-            limit=args.limit, preview=args.preview, review=args.review, log=_log)
+            limit=args.limit, preview=args.preview, review=args.review, dpi=args.dpi, log=_log)
     except Exception as e:
         _log(f'{label}error: {comic}: {e}')
         return False
@@ -97,6 +97,8 @@ def main(argv=None):
     ap.add_argument('-j', '--jobs', type=int, default=None,
                     help='parallel workers (default: CPU cores - 2)')
     ap.add_argument('--limit', type=int, help='only process the first N pages (testing)')
+    ap.add_argument('--dpi', type=int, default=150,
+                    help='resolution for rendering PDF pages to images (default: 150)')
     ap.add_argument('--model', default=None,
                     help="which model for --fallback: a preset ('general' default, "
                          "'manga'), a local .pt path, or a Hub repo id "

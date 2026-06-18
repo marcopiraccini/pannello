@@ -48,24 +48,26 @@ def detect_archive_type(path):
                              text=True, check=True).stdout.lower()
     except (subprocess.CalledProcessError, FileNotFoundError):
         out = ''
-    # Order matters: 'rar archive' and '7-zip' both contain "zip"-ish text, and
-    # 'zip' must also catch "Zip multi-volume archive data" (mislabeled .cbr files).
+    # Order matters: the broad 'zip' check must come LAST -- other formats mention
+    # "zip" in their description (e.g. a PDF "(zip deflate encoded)"), and 'zip'
+    # must also catch "Zip multi-volume archive data" (mislabeled .cbr files).
     if 'rar archive' in out:
         return 'rar'
     if '7-zip' in out:
         return '7z'
-    if 'zip' in out and 'gzip' not in out:
-        return 'zip'
     if 'pdf document' in out:
         return 'pdf'
     if 'posix tar' in out or 'tar archive' in out:
         return 'tar'
+    if 'zip' in out and 'gzip' not in out:
+        return 'zip'
     return {'.cbz': 'zip', '.cbr': 'rar', '.cb7': '7z', '.cbt': 'tar',
             '.pdf': 'pdf'}.get(path.suffix.lower())
 
 
-def extract_archive(path, dest):
-    """Extract a comic archive into dest. Returns the detected type."""
+def extract_archive(path, dest, dpi=150):
+    """Extract a comic archive into dest. Returns the detected type. PDFs are
+    rendered to JPEGs at `dpi` (pdftoppm)."""
     kind = detect_archive_type(path)
     try:
         if kind == 'zip':
@@ -80,7 +82,7 @@ def extract_archive(path, dest):
         elif kind == 'tar':
             subprocess.run(['tar', '-xf', str(path), '-C', str(dest)], check=True)
         elif kind == 'pdf':
-            subprocess.run(['pdftoppm', '-jpeg', '-r', '150', str(path),
+            subprocess.run(['pdftoppm', '-jpeg', '-r', str(dpi), str(path),
                             str(Path(dest) / 'page')], check=True)
         else:
             raise ValueError(f'unsupported archive: {path} (detected: {kind})')
@@ -352,7 +354,8 @@ def _loses_extent(model_panels, kumiko_panels):
 
 
 def generate(comic, rtl=None, jobs=None, fallback='auto', model_path=None,
-             model_conf=0.25, out_dir=None, limit=None, preview=False, review=False, log=None):
+             model_conf=0.25, out_dir=None, limit=None, preview=False, review=False,
+             dpi=150, log=None):
     """Generate panel JSON for one comic (archive or folder of images).
 
     Returns a stats dict. Writes <name>.json next to the comic, or into out_dir.
@@ -370,7 +373,7 @@ def generate(comic, rtl=None, jobs=None, fallback='auto', model_path=None,
     else:
         name = comic.stem
         tmp = tempfile.mkdtemp(prefix='pannello-')  # system temp (/tmp on Linux)
-        extract_archive(comic, tmp)
+        extract_archive(comic, tmp, dpi=dpi)
         root = tmp
 
     try:
@@ -645,16 +648,17 @@ def render_preview(pages, pages_data, dest_dir, name, limit=None, jobs=None,
     return pdir, sheets
 
 
-def repack(comic, out_dir=None, suffix='', log=None):
+def repack(comic, out_dir=None, suffix='', dpi=150, log=None):
     """Normalize a comic into a CBZ with flat, zero-padded page names in reading order.
 
     KOReader orders archive pages by raw byte order of their paths. Archives with
     chapter subfolders or odd names (e.g. a "- Appendice" folder sorting before
     "00") then read out of order, and panel JSON keyed by page index misaligns.
     Repacking to flat names like 0001.jpg, 0002.jpg, ... makes byte order == reading
-    order, so the book reads correctly AND panel indices line up.
+    order, so the book reads correctly AND panel indices line up. Also the simplest
+    way to turn a PDF into a CBZ (PDF pages are rendered to JPEGs at `dpi`).
 
-    Returns (out_path, page_count). Lossless: images are copied, only renamed.
+    Returns (out_path, page_count). Lossless for image archives (only renamed).
     """
     log = log or (lambda *_: None)
     comic = Path(comic).expanduser()
@@ -664,7 +668,7 @@ def repack(comic, out_dir=None, suffix='', log=None):
             root = comic
         else:
             tmp = tempfile.mkdtemp(prefix='pannello-repack-')
-            extract_archive(comic, tmp)
+            extract_archive(comic, tmp, dpi=dpi)
             root = tmp
         pages = list_pages(root)
         if not pages:

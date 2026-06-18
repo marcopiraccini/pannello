@@ -101,12 +101,23 @@ panels line up:
     pannello --repack "From Hell.cbr"      # -> "From Hell.cbz" + "From Hell.json"
 
 Put **both** files on the device and open the `.cbz` (not the original). Repacking
-is lossless (images are copied, only renamed). Archives that are already flat and
+is lossless for image archives (only renamed). Archives that are already flat and
 ordered (most comics) don't need it.
+
+`--repack` is also the simplest way to **convert a PDF to a CBZ**: it renders the
+PDF pages to images, packs them into a flat CBZ, and writes the aligned JSON --
+all in one command:
+
+    pannello --repack "comic.pdf"          # -> "comic.cbz" + "comic.json"
+
+PDF pages are rendered at 150 DPI by default; use `--dpi N` for a higher- or
+lower-resolution CBZ (e.g. `--dpi 300`). (PDFs also work without `--repack` --
+pannello reads them directly -- but then you only get the JSON, not a CBZ.)
 
 Key flags: `--rtl`/`--ltr` (force reading order), `--preview`, `--review`,
 `-o/--out-dir`, `-j/--jobs` (default cores-2), `--limit N` (first N pages, for
-testing), `--fallback {auto,model,none}`, `--model`, `--model-conf`, `-V/--version`.
+testing), `--dpi N` (PDF render resolution, default 150),
+`--fallback {auto,model,none}`, `--model`, `--model-conf`, `-V/--version`.
 
 ### Reading direction
 
