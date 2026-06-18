@@ -76,6 +76,7 @@ pannello comic.cbz --rtl             # manga (right-to-left reading order)
 pannello library/ -o out/            # write all JSON into out/
 pannello manga.cbz --rtl --model manga   # manga: right-to-left + manga model
 pannello comic.cbr --preview         # also write contact sheets to inspect the panels
+pannello --repack comic.pdf          # convert PDF -> CBZ (+ JSON); --dpi N for resolution
 pannello --help
 ```
 
