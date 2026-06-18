@@ -222,6 +222,30 @@ def detect_pages(pages, rtl, jobs, progress=None):
     return pages_data, weak, errors
 
 
+def detect_pages_model(pages, rtl, model_path, conf, progress=None):
+    """Model-primary detection: run the model on EVERY page, skipping kumiko.
+
+    Sequential (the model runs in this process, not the worker pool). Returns
+    pages_data like detect_pages but with NO 'source' marker, so the coverage
+    guarantee treats the model's boxes as raw detections (lone panels collapse to
+    full page, multi-panel pages get tiled). The model under-detects on many
+    comics, so expect more full-page collapses than the kumiko-primary path.
+    """
+    from . import model as _model
+    _model.load_model(model_path)  # fail fast if the [model] extra is missing
+    pages_data, total = [], len(pages)
+    for i, p in enumerate(pages):
+        try:
+            boxes, size = _model.detect_panels(str(p), rtl=rtl, model_path=model_path, conf=conf)
+            panels = _model.normalize(boxes, size)
+        except Exception:
+            panels = []
+        pages_data.append({'page': i + 1, 'image': pages[i].name, 'panels': panels})
+        if progress:
+            progress(i + 1, total)
+    return pages_data
+
+
 def deoverlap(panels):
     """Clip overlapping panels apart so the output is strictly disjoint. Each
     overlapping pair is split along the thinner overlap dimension at the overlap
@@ -355,7 +379,7 @@ def _loses_extent(model_panels, kumiko_panels):
 
 def generate(comic, rtl=None, jobs=None, fallback='auto', model_path=None,
              model_conf=0.25, out_dir=None, limit=None, preview=False, review=False,
-             dpi=150, log=None):
+             dpi=150, detector='kumiko', log=None):
     """Generate panel JSON for one comic (archive or folder of images).
 
     Returns a stats dict. Writes <name>.json next to the comic, or into out_dir.
@@ -414,10 +438,13 @@ def generate(comic, rtl=None, jobs=None, fallback='auto', model_path=None,
             def _dp(done, total):
                 print(f'\r  detecting page {done}/{total}',
                       end='\n' if done == total else '', file=sys.stderr, flush=True)
-            pages_data, _weak, errors = detect_pages(pages, rtl, jobs, progress=_dp)
+            if detector == 'model':
+                pages_data = detect_pages_model(pages, rtl, model_path, model_conf, progress=_dp)
+            else:
+                pages_data, _weak, errors = detect_pages(pages, rtl, jobs, progress=_dp)
 
-        # Unified "low-confidence" classification: any page kumiko probably got
-        # wrong (under-detection: crash/empty/full_page; or anomaly: sliver/
+        # Unified "low-confidence" classification: any page the detector probably
+        # got wrong (under-detection: crash/empty/full_page; or anomaly: sliver/
         # overlap/tiny).
         crashed = {pn for pn, _ in errors}
         issues = {}
@@ -426,10 +453,12 @@ def generate(comic, rtl=None, jobs=None, fallback='auto', model_path=None,
             if r:
                 issues[pd['page']] = r
 
-        # Try to fix EVERY low-confidence page with the model (replaces kumiko only
-        # when the model returns a cleaner multi-panel result). 'none' disables it,
-        # 'auto' degrades quietly if the [model] extra is missing, 'model' requires it.
-        to_fix = [] if fallback == 'none' else sorted(issues)
+        # kumiko-primary: try to fix EVERY low-confidence page with the model
+        # (replaces kumiko only when the model returns a cleaner multi-panel
+        # result). 'none' disables it, 'auto' degrades quietly if the [model] extra
+        # is missing, 'model' requires it. Skipped when detector=='model' (the model
+        # is already the primary detector -- the coverage guarantee handles the rest).
+        to_fix = [] if (fallback == 'none' or detector == 'model') else sorted(issues)
         if to_fix:
             try:
                 _run_fallback(pages, pages_data, to_fix, rtl, model_path, model_conf, log)

@@ -25,7 +25,8 @@ def _process(comic, args, label=''):
         st = core.generate(
             comic, rtl=rtl, jobs=args.jobs, fallback=args.fallback,
             model_path=args.model, model_conf=args.model_conf, out_dir=args.out_dir,
-            limit=args.limit, preview=args.preview, review=args.review, dpi=args.dpi, log=_log)
+            limit=args.limit, preview=args.preview, review=args.review, dpi=args.dpi,
+            detector=args.detector, log=_log)
     except Exception as e:
         _log(f'{label}error: {comic}: {e}')
         return False
@@ -104,6 +105,12 @@ def main(argv=None):
                          "'manga'), a local .pt path, or a Hub repo id "
                          "('owner/name' or 'owner/name:weights.pt')")
     ap.add_argument('--model-conf', type=float, default=0.25, help='model confidence threshold')
+    ap.add_argument('--detector', choices=['kumiko', 'model'], default='kumiko',
+                    help="primary detector: 'kumiko' (default, recommended) uses the "
+                         "model only as a fallback for weak pages; 'model' (experimental) "
+                         "skips kumiko and runs the model on every page (needs the [model] "
+                         "extra). model-only tends to under-detect and lose real panel "
+                         "grids -- kumiko-primary is more reliable")
     ap.add_argument('-V', '--version', action='version', version=f'pannello {__version__}')
     args = ap.parse_args(argv)
 

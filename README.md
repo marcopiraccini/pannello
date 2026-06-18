@@ -118,7 +118,8 @@ pannello reads them directly -- but then you only get the JSON, not a CBZ.)
 Key flags: `--rtl`/`--ltr` (force reading order), `--preview`, `--review`,
 `-o/--out-dir`, `-j/--jobs` (default cores-2), `--limit N` (first N pages, for
 testing), `--dpi N` (PDF render resolution, default 150),
-`--fallback {auto,model,none}`, `--model`, `--model-conf`, `-V/--version`.
+`--fallback {auto,model,none}`, `--detector {kumiko,model}` (experimental),
+`--model`, `--model-conf`, `-V/--version`.
 
 ### Reading direction
 
@@ -202,6 +203,24 @@ install hint if missing); the bare default degrades to kumiko-only.
 
 `--fallback`: `auto` (default) uses the model on low-confidence pages if installed;
 `model` requires it; `none` disables it (kumiko only).
+
+### Forcing the model (`--detector model`, experimental)
+
+By default kumiko is the primary detector and the model only fills in the pages
+kumiko fails on. `--detector model` flips that: it **skips kumiko** and runs the
+model on every page (needs the `[model]` extra).
+
+```sh
+pannello comic.cbz --detector model              # model on every page (general)
+pannello manga.cbz --rtl --detector model --model manga
+```
+
+This is **experimental and usually worse**. The panel models under-detect: on
+real multi-panel pages they often return a few boxes or none, so the coverage
+guarantee collapses those pages to a single full-page panel and you lose the
+grid. In testing, a 7-panel Preacher page that kumiko detects perfectly came back
+empty from the model. Use it only to experiment or with a model you know suits
+your material; for normal use, leave `--detector` at its default (`kumiko`).
 
 ## How it works
 
