@@ -70,15 +70,16 @@ def main(argv=None):
         prog='pannello',
         description='Detect comic panels and write KOReader panel-zoom JSON '
                     '(<comic>.json) using the official kumiko, with an optional model fallback.')
+    direction = ap.add_mutually_exclusive_group()
     ap.add_argument('input',
                     help='a comic (cbz/cbr/cb7/cbt/pdf), a folder of comics '
                          '(one JSON per archive), or a folder of page images')
     ap.add_argument('--repack', action='store_true',
                     help='first normalize the comic to a CBZ with flat reading-order '
                          'page names (fixes books KOReader sorts wrong), then write JSON for it')
-    ap.add_argument('--rtl', action='store_true',
+    direction.add_argument('--rtl', action='store_true',
                     help='force right-to-left reading order (manga)')
-    ap.add_argument('--ltr', action='store_true',
+    direction.add_argument('--ltr', action='store_true',
                     help='force left-to-right reading order')
     ap.add_argument('--preview', action='store_true',
                     help='also write contact-sheet PNGs (<name>.preview/) with numbered '

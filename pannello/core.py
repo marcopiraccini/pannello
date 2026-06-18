@@ -67,22 +67,31 @@ def detect_archive_type(path):
 def extract_archive(path, dest):
     """Extract a comic archive into dest. Returns the detected type."""
     kind = detect_archive_type(path)
-    if kind == 'zip':
-        with zipfile.ZipFile(path) as zf:
-            zf.extractall(dest)
-    elif kind == 'rar':
-        subprocess.run(['unrar', 'x', '-o+', '-y', '-inul', str(path), str(dest) + os.sep],
-                       check=True)
-    elif kind == '7z':
-        subprocess.run(['7z', 'x', '-y', f'-o{dest}', str(path)],
-                       check=True, stdout=subprocess.DEVNULL)
-    elif kind == 'tar':
-        subprocess.run(['tar', '-xf', str(path), '-C', str(dest)], check=True)
-    elif kind == 'pdf':
-        subprocess.run(['pdftoppm', '-jpeg', '-r', '150', str(path),
-                        str(Path(dest) / 'page')], check=True)
-    else:
-        raise ValueError(f'unsupported archive: {path} (detected: {kind})')
+    try:
+        if kind == 'zip':
+            with zipfile.ZipFile(path) as zf:
+                zf.extractall(dest)
+        elif kind == 'rar':
+            subprocess.run(['unrar', 'x', '-o+', '-y', '-inul', str(path), str(dest) + os.sep],
+                           check=True)
+        elif kind == '7z':
+            subprocess.run(['7z', 'x', '-y', f'-o{dest}', str(path)],
+                           check=True, stdout=subprocess.DEVNULL)
+        elif kind == 'tar':
+            subprocess.run(['tar', '-xf', str(path), '-C', str(dest)], check=True)
+        elif kind == 'pdf':
+            subprocess.run(['pdftoppm', '-jpeg', '-r', '150', str(path),
+                            str(Path(dest) / 'page')], check=True)
+        else:
+            raise ValueError(f'unsupported archive: {path} (detected: {kind})')
+    except FileNotFoundError as e:
+        tool = {
+            'rar': 'unrar',
+            '7z': '7z',
+            'tar': 'tar',
+            'pdf': 'pdftoppm',
+        }.get(kind, kind or 'extractor')
+        raise RuntimeError(f'missing required tool {tool!r} to extract {path.name}') from e
     return kind
 
 
@@ -351,6 +360,8 @@ def generate(comic, rtl=None, jobs=None, fallback='auto', model_path=None,
     log = log or (lambda *_: None)
     jobs = jobs or max(1, (os.cpu_count() or 2) - 2)
     comic = Path(comic).expanduser()
+    if limit is not None and limit < 0:
+        raise ValueError('--limit must be >= 0')
 
     if comic.is_dir():
         name = comic.name
@@ -363,10 +374,12 @@ def generate(comic, rtl=None, jobs=None, fallback='auto', model_path=None,
         root = tmp
 
     try:
-        pages = list_pages(root)
-        if limit:
-            pages = pages[:limit]
-        if not pages:
+        all_pages = list_pages(root)
+        if limit is not None:
+            pages = all_pages[:max(0, limit)]
+        else:
+            pages = all_pages
+        if not pages and limit is None:
             raise ValueError(f'no page images found in {comic}')
 
         # Reading direction: explicit flag wins; else ComicInfo.xml; else default
@@ -375,25 +388,30 @@ def generate(comic, rtl=None, jobs=None, fallback='auto', model_path=None,
         rtl_source = 'flag'
         gray_hint = False
         if rtl is None:
-            detected = detect_reading_direction(root)
-            if detected is not None:
-                rtl = detected == 'rtl'
-                rtl_source = 'ComicInfo.xml'
+            if pages:
+                detected = detect_reading_direction(root)
+                if detected is not None:
+                    rtl = detected == 'rtl'
+                    rtl_source = 'ComicInfo.xml'
+                else:
+                    rtl = False
+                    rtl_source = 'default'
+                    gray_hint = looks_grayscale(pages)
             else:
                 rtl = False
                 rtl_source = 'default'
-                gray_hint = looks_grayscale(pages)
 
         # KOReader reads archives in byte-sort order; warn if that differs from
         # pannello's order (panels would misalign) -- only relevant for archives.
-        order_mismatch = (not comic.is_dir()) and koreader_order_differs(pages, root)
+        order_mismatch = bool(pages) and (not comic.is_dir()) and koreader_order_differs(pages, root)
 
         t0 = time.time()
-
-        def _dp(done, total):
-            print(f'\r  detecting page {done}/{total}',
-                  end='\n' if done == total else '', file=sys.stderr, flush=True)
-        pages_data, _weak, errors = detect_pages(pages, rtl, jobs, progress=_dp)
+        pages_data, errors = [], []
+        if pages:
+            def _dp(done, total):
+                print(f'\r  detecting page {done}/{total}',
+                      end='\n' if done == total else '', file=sys.stderr, flush=True)
+            pages_data, _weak, errors = detect_pages(pages, rtl, jobs, progress=_dp)
 
         # Unified "low-confidence" classification: any page kumiko probably got
         # wrong (under-detection: crash/empty/full_page; or anomaly: sliver/
@@ -420,12 +438,12 @@ def generate(comic, rtl=None, jobs=None, fallback='auto', model_path=None,
                     log(f'  {n} page(s) kumiko could not parse; install '
                         f'"pannello[model]" to auto-fill them with the model')
 
-        # A lone-panel page the model couldn't split into a real grid: collapse to
-        # a SINGLE full-page panel (cover the whole page -- never leave a strip
-        # unreachable, and never ship wrong/partial boundaries).
+        # Any page the model couldn't rescue into a clean multi-panel grid:
+        # collapse to a SINGLE full-page panel (cover the whole page -- never
+        # leave a strip unreachable, and never ship wrong/partial boundaries).
         for pn, reason in issues.items():
             pd = pages_data[pn - 1]
-            if reason == 'full_page' and pd.get('source') != 'model':
+            if not pd['panels'] or (reason == 'full_page' and pd.get('source') != 'model'):
                 pd['panels'] = [{'x': 0.0, 'y': 0.0, 'w': 1.0, 'h': 1.0}]
                 pd['source'] = 'fullpage'
 
@@ -461,10 +479,13 @@ def generate(comic, rtl=None, jobs=None, fallback='auto', model_path=None,
                 'panels': len(pd['panels']),
             })
 
+        pages_out = [{'page': pd['page'], 'image': pd['image'], 'panels': pd['panels']}
+                     for pd in pages_data]
+
         result = {
             'reading_direction': 'rtl' if rtl else 'ltr',
             'total_pages': len(pages_data),
-            'pages': pages_data,
+            'pages': pages_out,
         }
         dest_dir = Path(out_dir) if out_dir else comic.parent
         dest_dir.mkdir(parents=True, exist_ok=True)
@@ -595,7 +616,8 @@ def render_preview(pages, pages_data, dest_dir, name, limit=None, jobs=None,
     jobs = jobs or max(2, (os.cpu_count() or 2) - 2)
     cols, rows, cw, ch = _PREVIEW_COLS, _PREVIEW_ROWS, _PREVIEW_CW, _PREVIEW_CH
     per = cols * rows
-    idx_list = indices if indices is not None else list(range(min(limit or len(pages), len(pages))))
+    limit_pages = len(pages) if limit is None else max(0, limit)
+    idx_list = indices if indices is not None else list(range(min(limit_pages, len(pages))))
     total_sheets = (len(idx_list) + per - 1) // per
     pdir = dest_dir / f'{name}.{suffix}'
     pdir.mkdir(parents=True, exist_ok=True)

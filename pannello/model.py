@@ -32,6 +32,7 @@ PANEL_CLASS_NAMES = ('frame', 'panel', 'panels', 'comic panel', 'comic_panel')
 
 _MODEL = None
 _PANEL_CLASS_IDS = None
+_MODEL_CACHE = {}
 
 
 # Convenience presets selectable by name via --model.
@@ -47,13 +48,14 @@ def _resolve_weights(model):
     Accepts: None (default 'general' preset), a preset name ('general'/'manga'),
     a local .pt path, or a Hub spec 'repo' / 'repo:path/to/weights.pt'.
     """
-    from huggingface_hub import hf_hub_download
     if model is None or model in PRESETS:
+        from huggingface_hub import hf_hub_download
         repo, file = PRESETS.get(model or 'general')
         return hf_hub_download(repo_id=repo, filename=file)
     if os.path.exists(model):
         return model
     if '/' in model:  # Hub repo id, optionally 'repo:weights.pt'
+        from huggingface_hub import hf_hub_download
         repo, _, file = model.partition(':')
         return hf_hub_download(repo_id=repo, filename=file or DEFAULT_FILE)
     raise ValueError(f"--model '{model}': not a preset, local path, or hub repo id")
@@ -62,8 +64,6 @@ def _resolve_weights(model):
 def load_model(model_path=None):
     """Load (and cache) the YOLO model. Downloads weights into the HF cache on first use."""
     global _MODEL, _PANEL_CLASS_IDS
-    if _MODEL is not None:
-        return _MODEL
     try:
         import torch
         from ultralytics import YOLO
@@ -73,7 +73,13 @@ def load_model(model_path=None):
             "pip install 'pannello[model]'  (or install torch + ultralytics)") from e
 
     weights = _resolve_weights(model_path)
-    model = YOLO(weights).to('cuda' if torch.cuda.is_available() else 'cpu')
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    cache_key = (str(weights), device)
+    if cache_key in _MODEL_CACHE:
+        _MODEL, _PANEL_CLASS_IDS = _MODEL_CACHE[cache_key]
+        return _MODEL
+
+    model = YOLO(weights).to(device)
 
     ids = [cid for cid, name in model.names.items()
            if str(name).lower() in PANEL_CLASS_NAMES]
@@ -84,6 +90,7 @@ def load_model(model_path=None):
                   file=sys.stderr)
     _MODEL = model
     _PANEL_CLASS_IDS = set(ids)
+    _MODEL_CACHE[cache_key] = (_MODEL, _PANEL_CLASS_IDS)
     return _MODEL
 
 
