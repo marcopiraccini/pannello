@@ -169,6 +169,39 @@ class GenerateTests(unittest.TestCase):
         self.assertEqual(n, 0)
         self.assertNotIn('source', pages_data[0])
 
+    def test_preview_only_missing_json_raises(self):
+        with tempfile.TemporaryDirectory() as td:
+            comic = _make_comic_dir(Path(td), 'book', filenames=('page001.png',))
+            with self.assertRaises(FileNotFoundError):
+                core.preview_from_json(comic)
+
+    def test_preview_from_json_uses_json_panels_and_runs_no_detection(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            comic = _make_comic_dir(root, 'book', filenames=('p1.png', 'p2.png'))
+            panels = [{'x': 0.0, 'y': 0.0, 'w': 1.0, 'h': 0.5},
+                      {'x': 0.0, 'y': 0.5, 'w': 1.0, 'h': 0.5}]
+            (root / 'book.json').write_text(json.dumps({
+                'reading_direction': 'ltr', 'total_pages': 2,
+                'pages': [{'page': 1, 'image': 'p1.png', 'panels': panels},
+                          {'page': 2, 'image': 'p2.png', 'panels': []}]}), encoding='utf-8')
+
+            captured = {}
+
+            def fake_render(pages, pages_data, dest_dir, name, **kw):
+                captured['pages'] = pages
+                captured['data'] = pages_data
+                return (dest_dir / f'{name}.preview', 1)
+
+            with patch.object(core, 'render_preview', side_effect=fake_render), \
+                 patch.object(core, 'detect_pages', side_effect=AssertionError('no detection')), \
+                 patch.object(core, 'kumiko_one', side_effect=AssertionError('no kumiko')):
+                st = core.preview_from_json(comic)
+
+            self.assertEqual([d['panels'] for d in captured['data']], [panels, []])
+            self.assertEqual([p.name for p in captured['pages']], ['p1.png', 'p2.png'])
+            self.assertEqual(st['pages'], 2)
+
     def test_extract_archive_missing_tool_raises_helpful_error(self):
         with tempfile.TemporaryDirectory() as td:
             dest = Path(td)

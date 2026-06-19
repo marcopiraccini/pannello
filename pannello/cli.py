@@ -14,6 +14,16 @@ def _log(msg):
 
 
 def _process(comic, args, label=''):
+    if args.preview_only:
+        try:
+            st = core.preview_from_json(comic, out_dir=args.out_dir, jobs=args.jobs,
+                                        limit=args.limit, dpi=args.dpi, log=_log)
+        except Exception as e:
+            _log(f'{label}preview failed: {comic}: {e}')
+            return False
+        _log(f'{label}{st["comic"]}: preview -> {st["preview_dir"]} '
+             f'({st["preview_sheets"]} sheets, from {st["json"].name})')
+        return True
     if args.repack:
         try:
             comic, _ = core.repack(comic, out_dir=args.out_dir, dpi=args.dpi, log=_log)
@@ -86,6 +96,10 @@ def main(argv=None):
     ap.add_argument('--preview', action='store_true',
                     help='also write contact-sheet PNGs (<name>.preview/) with numbered '
                          'panel boxes for visual QA (green=kumiko, red=model)')
+    ap.add_argument('--preview-only', action='store_true',
+                    help='render the preview contact sheets from an EXISTING <name>.json '
+                         'and exit -- no detection runs (no kumiko/model/Magi). Errors if '
+                         'the JSON does not exist')
     ap.add_argument('--review', action='store_true',
                     help='write a focused contact sheet (<name>.review/) of just the '
                          'low-confidence pages, captioned with their reason')

@@ -143,7 +143,8 @@ PDF pages are rendered at 150 DPI by default; use `--dpi N` for a higher- or
 lower-resolution CBZ (e.g. `--dpi 300`). (PDFs also work without `--repack` --
 pannello reads them directly -- but then you only get the JSON, not a CBZ.)
 
-Key flags: `--rtl`/`--ltr` (force reading order), `--preview`, `--review`,
+Key flags: `--rtl`/`--ltr` (force reading order), `--preview`, `--preview-only`
+(render sheets from an existing JSON, no detection), `--review`,
 `-o/--out-dir`, `-j/--jobs` (default cores-2), `--limit N` (first N pages, for
 testing), `--dpi N` (PDF render resolution, default 150),
 `--fallback {auto,model,none}`, `--detector {kumiko,model}` (experimental),
@@ -166,6 +167,16 @@ right -- panel 1 should be top-right for manga) on your computer instead of
 round-tripping to the device. Green boxes = kumiko, red = model-rescued.
 Sheets render in parallel with a `sheet k/N` progress line; use `--limit N` to
 preview only the first N pages of a big book.
+
+**`--preview-only`** renders those sheets from an **existing `<name>.json`** and
+exits -- no detection runs (no kumiko/model/Magi). Use it to re-inspect a result
+you already generated without paying for detection again; it errors if the JSON
+doesn't exist yet. (Boxes are all green, since the JSON doesn't record which
+detector produced each panel.)
+
+```sh
+pannello --preview-only "My Comic.cbz"     # draw the boxes already in My Comic.json
+```
 
 ### Ordering check
 

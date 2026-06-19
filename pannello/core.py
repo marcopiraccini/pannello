@@ -681,6 +681,64 @@ def looks_grayscale(pages, sample=5):
     return n > 0 and gray / n >= 0.8
 
 
+def preview_from_json(comic, out_dir=None, jobs=None, limit=None, dpi=150, log=None):
+    """Render preview contact sheets from an EXISTING <name>.json -- no detection.
+
+    Loads the panel JSON a previous run wrote and draws its panels over the page
+    images (page images are matched to JSON entries by filename, falling back to
+    order). Raises FileNotFoundError if the JSON is not next to the comic / in
+    out_dir. Returns {comic, preview_dir, preview_sheets, pages, json}.
+    """
+    log = log or (lambda *_: None)
+    comic = Path(comic).expanduser()
+    name = comic.name if comic.is_dir() else comic.stem
+    dest_dir = Path(out_dir) if out_dir else comic.parent
+    json_path = dest_dir / f'{name}.json'
+    if not json_path.exists():
+        raise FileNotFoundError(
+            f'no panel JSON to preview: {json_path} '
+            f'(run pannello on {comic.name} first to create it)')
+    with open(json_path, encoding='utf-8') as f:
+        pages_json = json.load(f).get('pages', [])
+
+    tmp = None
+    try:
+        if comic.is_dir():
+            root = comic
+        else:
+            tmp = tempfile.mkdtemp(prefix='pannello-preview-')
+            extract_archive(comic, tmp, dpi=dpi)
+            root = tmp
+        imgs = list_pages(root)
+        by_name = {p.name: p for p in imgs}
+        pages, pages_data, missing = [], [], 0
+        for i, entry in enumerate(pages_json):
+            p = by_name.get(entry.get('image')) or (imgs[i] if i < len(imgs) else None)
+            if p is None:
+                missing += 1
+                continue
+            pages.append(p)
+            pages_data.append({'page': entry.get('page', i + 1),
+                               'image': entry.get('image', p.name),
+                               'panels': entry.get('panels', [])})
+        if missing:
+            log(f'  warning: {missing} page(s) in the JSON had no matching image')
+        if not pages:
+            raise ValueError(f'no page images matched the JSON for {comic.name}')
+
+        def _pp(done, total):
+            print(f'\r  preview: sheet {done}/{total}',
+                  end='\n' if done == total else '', file=sys.stderr, flush=True)
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        preview_dir, sheets = render_preview(pages, pages_data, dest_dir, name,
+                                             limit=limit, jobs=jobs, progress=_pp)
+        return {'comic': name, 'preview_dir': preview_dir, 'preview_sheets': sheets,
+                'pages': len(pages), 'json': json_path}
+    finally:
+        if tmp:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
 _PREVIEW_COLS, _PREVIEW_ROWS, _PREVIEW_CW, _PREVIEW_CH = 4, 5, 360, 500
 
 
