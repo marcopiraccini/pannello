@@ -52,11 +52,11 @@ def _print_low_confidence(lc, total, label=''):
         return
     fixed = sum(1 for x in lc if x['fixed'])
     _log(f'{label}  low-confidence: {len(lc)}/{total} pages '
-         f'({fixed} fixed by model, {len(lc) - fixed} to review)')
+         f'({fixed} fixed, {len(lc) - fixed} to review)')
     _log(f'{label}    page  reason     result')
     for x in lc[:20]:
         if x['fixed']:
-            result = f'fixed -> {x["panels"]} panels (model)'
+            result = f'fixed -> {x["panels"]} panels ({x.get("by") or "model"})'
         elif x.get('fullpage'):
             result = 'full page'
         else:
@@ -118,10 +118,11 @@ def main(argv=None):
                          "extra. NOTE: Magi is a NON-COMMERCIAL model -- opting in is your "
                          "acceptance of its license")
     ap.add_argument('--thorough', action='store_true',
-                    help="use Magi as the SOLE detector: disable kumiko and run Magi on "
-                         "every page, with its result authoritative (a <2-panel page is a "
-                         "real splash, not a failure). Catches subtle boundary errors no "
-                         "cheap signal can detect. Slowest, best quality. Implies --magi")
+                    help="make Magi the primary detector on EVERY page (its result is "
+                         "authoritative -- a <2-panel page is a real splash, not a "
+                         "failure), with kumiko kept only as a cheap safety net for the "
+                         "pages Magi botches (hole / messy overlap). Catches subtle errors "
+                         "no cheap signal can detect. Slowest, best quality. Implies --magi")
     ap.add_argument('-V', '--version', action='version', version=f'pannello {__version__}')
     args = ap.parse_args(argv)
 

@@ -84,7 +84,7 @@ pipx inject pannello "transformers==4.36.2" einops shapely timm
 # (torch comes with the [model] extra; if you don't have it: pipx inject pannello torch)
 
 pannello comic.cbz --magi            # kumiko primary; Magi rescues the pages it botched
-pannello comic.cbz --thorough        # Magi only: kumiko off, Magi detects every page (slow)
+pannello comic.cbz --thorough        # Magi on every page, kumiko as a safety net (slow)
 ```
 
 > **License: Magi is NON-COMMERCIAL.** Its model card grants use only for
@@ -146,8 +146,8 @@ Key flags: `--rtl`/`--ltr` (force reading order), `--preview`, `--review`,
 `-o/--out-dir`, `-j/--jobs` (default cores-2), `--limit N` (first N pages, for
 testing), `--dpi N` (PDF render resolution, default 150),
 `--fallback {auto,model,none}`, `--detector {kumiko,model}` (experimental),
-`--magi` (higher-precision fallback engine), `--thorough` (re-check clean pages
-with Magi), `--model`, `--model-conf`, `-V/--version`.
+`--magi` (higher-precision fallback engine), `--thorough` (Magi primary on every
+page, kumiko as safety net), `--model`, `--model-conf`, `-V/--version`.
 
 ### Reading direction
 
@@ -228,9 +228,12 @@ quality -- so this is a speed budget, not an accuracy problem:
 
 - `--magi`: kumiko stays primary; Magi runs only on the gross-failure pages. Fast,
   catches the splash/full-page cases.
-- `--thorough`: kumiko is **disabled** -- Magi detects every page and its result is
-  authoritative (a <2-panel page is a real splash, not a failure). This is the only
-  way to catch the subtle errors. Slowest, best quality.
+- `--thorough`: Magi becomes the **primary** detector on every page and its result
+  is authoritative (a <2-panel page is a real splash, not a failure). kumiko is no
+  longer primary but is kept as a cheap **safety net**: on the pages Magi botches
+  (a hole, or a messy overlap that won't clip clean) kumiko's grid is used instead
+  of collapsing to a full page. This is the only way to catch the subtle errors.
+  Slowest, best quality.
 
 ### Choosing the model
 

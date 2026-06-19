@@ -130,6 +130,45 @@ class GenerateTests(unittest.TestCase):
         self.assertNotIn('source', pages_data[0])
         self.assertEqual(pages_data[0]['panels'], kept)
 
+    def test_magi_primary_kumiko_rescues_holey_page(self):
+        # Magi left a mid-page hole; kumiko has a clean 2-panel grid -> kumiko wins.
+        magi_holey = [{'x': 0.0, 'y': 0.0, 'w': 1.0, 'h': 0.3},
+                      {'x': 0.0, 'y': 0.7, 'w': 1.0, 'h': 0.3}]
+        pages = [Path('p1.png')]
+        pages_data = [{'page': 1, 'image': 'p1.png', 'panels': magi_holey}]
+        info = {'size': [100, 100], 'panels': [[0, 0, 100, 50], [0, 50, 100, 50]]}
+
+        with patch.object(core, 'kumiko_one', return_value=info):
+            n = core._kumiko_fallback_for_magi(pages, pages_data, False)
+
+        self.assertEqual(n, 1)
+        self.assertEqual(pages_data[0]['source'], 'kumiko')
+        self.assertFalse(core.has_hole(pages_data[0]['panels']))
+
+    def test_magi_primary_keeps_clean_magi_without_calling_kumiko(self):
+        clean = [{'x': 0.0, 'y': 0.0, 'w': 1.0, 'h': 0.5},
+                 {'x': 0.0, 'y': 0.5, 'w': 1.0, 'h': 0.5}]
+        pages = [Path('p1.png')]
+        pages_data = [{'page': 1, 'image': 'p1.png', 'panels': clean}]
+
+        with patch.object(core, 'kumiko_one', side_effect=AssertionError('kumiko not needed')):
+            n = core._kumiko_fallback_for_magi(pages, pages_data, False)
+
+        self.assertEqual(n, 0)
+        self.assertNotIn('source', pages_data[0])
+
+    def test_magi_primary_trusts_single_panel_splash(self):
+        # A Magi 1-panel result is a real splash; kumiko must not be consulted.
+        pages = [Path('p1.png')]
+        pages_data = [{'page': 1, 'image': 'p1.png',
+                       'panels': [{'x': 0.0, 'y': 0.0, 'w': 1.0, 'h': 1.0}]}]
+
+        with patch.object(core, 'kumiko_one', side_effect=AssertionError('splash, no kumiko')):
+            n = core._kumiko_fallback_for_magi(pages, pages_data, False)
+
+        self.assertEqual(n, 0)
+        self.assertNotIn('source', pages_data[0])
+
     def test_extract_archive_missing_tool_raises_helpful_error(self):
         with tempfile.TemporaryDirectory() as td:
             dest = Path(td)

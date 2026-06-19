@@ -387,6 +387,41 @@ def _loses_extent(model_panels, kumiko_panels):
     return k > 0 and m < 0.9 * k
 
 
+def _kumiko_fallback_for_magi(pages, pages_data, rtl, log=None):
+    """Magi-primary (--thorough) safety net: kumiko is a cheap second opinion for the
+    pages Magi botched -- it found nothing, left a real hole, or has a messy overlap
+    that won't clip clean. kumiko replaces Magi there only if kumiko's own grid is
+    clean (>=2 panels, no anomalies/hole) and doesn't drop coverage. A Magi 1-panel
+    result is a real splash, so it's left alone. Returns the count kumiko rescued.
+    """
+    log = log or (lambda *_: None)
+    rescued = 0
+    for pd in pages_data:
+        ps = pd['panels']
+        if len(ps) == 1:
+            continue  # Magi splash / full page: trust it
+        cleaned = deoverlap(ps) if (len(ps) >= 2 and detect_anomalies(ps)) else ps
+        if cleaned and not detect_anomalies(cleaned) and not has_hole(cleaned):
+            pd['panels'] = cleaned
+            continue  # Magi is clean here
+        try:
+            kp = normalize_panels(kumiko_one(str(pages[pd['page'] - 1]), rtl))
+        except Exception:
+            pd['panels'] = cleaned if cleaned else ps
+            continue
+        kc = deoverlap(kp) if (len(kp) >= 2 and detect_anomalies(kp)) else kp
+        if (len(kc) >= 2 and not detect_anomalies(kc) and not has_hole(kc)
+                and not _loses_extent(kc, cleaned if cleaned else ps)):
+            pd['panels'] = kc
+            pd['source'] = 'kumiko'
+            rescued += 1
+        else:
+            pd['panels'] = cleaned if cleaned else ps  # keep Magi; safety net handles it
+    if rescued:
+        log(f'  kumiko rescued {rescued} page(s) Magi botched (hole/overlap)')
+    return rescued
+
+
 def generate(comic, rtl=None, jobs=None, fallback='auto', model_path=None,
              model_conf=0.25, out_dir=None, limit=None, preview=False, review=False,
              dpi=150, detector='kumiko', magi=False, thorough=False, log=None):
@@ -442,9 +477,9 @@ def generate(comic, rtl=None, jobs=None, fallback='auto', model_path=None,
         # pannello's order (panels would misalign) -- only relevant for archives.
         order_mismatch = bool(pages) and (not comic.is_dir()) and koreader_order_differs(pages, root)
 
-        # --thorough makes Magi the SOLE detector (kumiko disabled): Magi runs on
-        # every page and its result is authoritative -- a <2-panel result is a
-        # genuine splash/full page, not a failure to be overruled by kumiko.
+        # --thorough makes Magi the PRIMARY detector on every page: its result is
+        # authoritative (a <2-panel result is a genuine splash, not a failure), and
+        # kumiko is kept only as a safety net for pages Magi botches (see below).
         magi_primary = bool(thorough and magi)
 
         t0 = time.time()
@@ -457,7 +492,7 @@ def generate(comic, rtl=None, jobs=None, fallback='auto', model_path=None,
                 eng = None
                 if magi_primary:
                     from . import magi as eng
-                    log('  detector: Magi on every page (kumiko disabled)')
+                    log('  detector: Magi on every page (kumiko = safety net)')
                 pages_data = detect_pages_model(pages, rtl, model_path, model_conf,
                                                 progress=_dp, engine=eng)
             else:
@@ -497,6 +532,12 @@ def generate(comic, rtl=None, jobs=None, fallback='auto', model_path=None,
                     log(f'  {n} page(s) kumiko could not parse; install '
                         f'"pannello[model]" to auto-fill them with the model')
 
+        # Magi-primary (--thorough): fall back to kumiko on the pages Magi botched
+        # (hole / messy overlap / found nothing) before the coverage guarantee would
+        # collapse them to a full page. A Magi splash (1 panel) is trusted.
+        if magi_primary:
+            _kumiko_fallback_for_magi(pages, pages_data, rtl, log)
+
         # Any page the model couldn't rescue into a clean multi-panel grid:
         # collapse to a SINGLE full-page panel (cover the whole page -- never
         # leave a strip unreachable, and never ship wrong/partial boundaries).
@@ -531,10 +572,12 @@ def generate(comic, rtl=None, jobs=None, fallback='auto', model_path=None,
         low_confidence = []
         for pn, reason in sorted(issues.items()):
             pd = pages_data[pn - 1]
+            src = pd.get('source')
             low_confidence.append({
                 'page': pn, 'reason': reason,
-                'fixed': pd.get('source') == 'model',
-                'fullpage': pd.get('source') == 'fullpage',
+                'fixed': src in ('model', 'kumiko'),
+                'fullpage': src == 'fullpage',
+                'by': src,
                 'panels': len(pd['panels']),
             })
 
