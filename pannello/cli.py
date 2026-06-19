@@ -26,7 +26,7 @@ def _process(comic, args, label=''):
             comic, rtl=rtl, jobs=args.jobs, fallback=args.fallback,
             model_path=args.model, model_conf=args.model_conf, out_dir=args.out_dir,
             limit=args.limit, preview=args.preview, review=args.review, dpi=args.dpi,
-            detector=args.detector, log=_log)
+            detector=args.detector, magi=args.magi, thorough=args.thorough, log=_log)
     except Exception as e:
         _log(f'{label}error: {comic}: {e}')
         return False
@@ -111,6 +111,17 @@ def main(argv=None):
                          "skips kumiko and runs the model on every page (needs the [model] "
                          "extra). model-only tends to under-detect and lose real panel "
                          "grids -- kumiko-primary is more reliable")
+    ap.add_argument('--magi', action='store_true',
+                    help="use Magi as the fallback engine instead of the YOLO model. "
+                         "Magi segments panels far more precisely (incl. irregular/splash "
+                         "layouts) but is ~2GB and slow (~2-7s/page). Needs the [magi] "
+                         "extra. NOTE: Magi is a NON-COMMERCIAL model -- opting in is your "
+                         "acceptance of its license")
+    ap.add_argument('--thorough', action='store_true',
+                    help="use Magi as the SOLE detector: disable kumiko and run Magi on "
+                         "every page, with its result authoritative (a <2-panel page is a "
+                         "real splash, not a failure). Catches subtle boundary errors no "
+                         "cheap signal can detect. Slowest, best quality. Implies --magi")
     ap.add_argument('-V', '--version', action='version', version=f'pannello {__version__}')
     args = ap.parse_args(argv)
 
@@ -118,6 +129,10 @@ def main(argv=None):
     # [model] extra is missing instead of silently degrading.
     if args.model is not None and args.fallback == 'auto':
         args.fallback = 'model'
+
+    # --thorough only makes sense with the precise engine, so it implies --magi.
+    if args.thorough:
+        args.magi = True
 
     src = os.path.expanduser(args.input)
     if not os.path.exists(src):

@@ -222,22 +222,24 @@ def detect_pages(pages, rtl, jobs, progress=None):
     return pages_data, weak, errors
 
 
-def detect_pages_model(pages, rtl, model_path, conf, progress=None):
-    """Model-primary detection: run the model on EVERY page, skipping kumiko.
+def detect_pages_model(pages, rtl, model_path, conf, progress=None, engine=None):
+    """Engine-primary detection: run the engine (YOLO model by default, or Magi)
+    on EVERY page, skipping kumiko.
 
-    Sequential (the model runs in this process, not the worker pool). Returns
+    Sequential (the engine runs in this process, not the worker pool). Returns
     pages_data like detect_pages but with NO 'source' marker, so the coverage
-    guarantee treats the model's boxes as raw detections (lone panels collapse to
-    full page, multi-panel pages get tiled). The model under-detects on many
-    comics, so expect more full-page collapses than the kumiko-primary path.
+    guarantee treats the engine's boxes as raw detections (lone panels collapse to
+    full page, multi-panel pages get tiled). The YOLO model under-detects on many
+    comics; Magi is far more accurate (see --thorough).
     """
-    from . import model as _model
-    _model.load_model(model_path)  # fail fast if the [model] extra is missing
+    if engine is None:
+        from . import model as engine
+    engine.load_model(model_path)  # fail fast if the extra is missing
     pages_data, total = [], len(pages)
     for i, p in enumerate(pages):
         try:
-            boxes, size = _model.detect_panels(str(p), rtl=rtl, model_path=model_path, conf=conf)
-            panels = _model.normalize(boxes, size)
+            boxes, size = engine.detect_panels(str(p), rtl=rtl, model_path=model_path, conf=conf)
+            panels = engine.normalize(boxes, size)
         except Exception:
             panels = []
         pages_data.append({'page': i + 1, 'image': pages[i].name, 'panels': panels})
@@ -339,24 +341,32 @@ def expand_to_page(panels):
     return out
 
 
-def _run_fallback(pages, pages_data, weak, rtl, model_path, conf, log):
-    """Re-detect weak pages with the model. Returns count of pages rescued."""
-    from . import model as panel_model
-    panel_model.load_model(model_path)
+def _run_fallback(pages, pages_data, weak, rtl, model_path, conf, log, engine=None):
+    """Re-detect weak pages with the fallback engine (YOLO model by default, or
+    Magi). Returns count of pages rescued."""
+    if engine is None:
+        from . import model as engine
+    engine.load_model(model_path)
     rescued = 0
     for pn in weak:
         idx = pn - 1
         try:
-            boxes, size = panel_model.detect_panels(
+            boxes, size = engine.detect_panels(
                 str(pages[idx]), rtl=rtl, model_path=model_path, conf=conf)
         except Exception as e:
             log(f'  fallback error page {pn}: {e}')
             continue
-        panels = panel_model.normalize(boxes, size)
-        # Apply the model only when its result is CLEAN (>=2 panels, no anomalies of
-        # its own) AND it covers the same content extent as kumiko (its bounding box
-        # isn't smaller -- otherwise the model dropped a whole region, e.g. a column,
-        # which would be lost). Final tiling fills any internal gaps afterwards.
+        panels = engine.normalize(boxes, size)
+        # A big/irregular panel's bounding box often overlaps its smaller neighbours
+        # (e.g. a splash figure beside a column of insets) -- that's a legit layout,
+        # not a bad detection. Clip overlaps apart first (as the coverage guarantee
+        # would anyway) BEFORE judging, or we'd wrongly reject good segmentations.
+        if len(panels) >= 2 and detect_anomalies(panels):
+            panels = deoverlap(panels)
+        # Apply the engine only when its result is CLEAN (>=2 panels, no leftover
+        # anomalies) AND it covers the same content extent as kumiko (its bounding box
+        # isn't smaller -- otherwise it dropped a whole region, e.g. a column, which
+        # would be lost). Final tiling fills any internal gaps afterwards.
         kp = pages_data[idx]['panels']
         if len(panels) >= 2 and not detect_anomalies(panels) and not _loses_extent(panels, kp):
             pages_data[idx]['panels'] = panels
@@ -379,7 +389,7 @@ def _loses_extent(model_panels, kumiko_panels):
 
 def generate(comic, rtl=None, jobs=None, fallback='auto', model_path=None,
              model_conf=0.25, out_dir=None, limit=None, preview=False, review=False,
-             dpi=150, detector='kumiko', log=None):
+             dpi=150, detector='kumiko', magi=False, thorough=False, log=None):
     """Generate panel JSON for one comic (archive or folder of images).
 
     Returns a stats dict. Writes <name>.json next to the comic, or into out_dir.
@@ -432,14 +442,24 @@ def generate(comic, rtl=None, jobs=None, fallback='auto', model_path=None,
         # pannello's order (panels would misalign) -- only relevant for archives.
         order_mismatch = bool(pages) and (not comic.is_dir()) and koreader_order_differs(pages, root)
 
+        # --thorough makes Magi the SOLE detector (kumiko disabled): Magi runs on
+        # every page and its result is authoritative -- a <2-panel result is a
+        # genuine splash/full page, not a failure to be overruled by kumiko.
+        magi_primary = bool(thorough and magi)
+
         t0 = time.time()
         pages_data, errors = [], []
         if pages:
             def _dp(done, total):
                 print(f'\r  detecting page {done}/{total}',
                       end='\n' if done == total else '', file=sys.stderr, flush=True)
-            if detector == 'model':
-                pages_data = detect_pages_model(pages, rtl, model_path, model_conf, progress=_dp)
+            if detector == 'model' or magi_primary:
+                eng = None
+                if magi_primary:
+                    from . import magi as eng
+                    log('  detector: Magi on every page (kumiko disabled)')
+                pages_data = detect_pages_model(pages, rtl, model_path, model_conf,
+                                                progress=_dp, engine=eng)
             else:
                 pages_data, _weak, errors = detect_pages(pages, rtl, jobs, progress=_dp)
 
@@ -453,18 +473,25 @@ def generate(comic, rtl=None, jobs=None, fallback='auto', model_path=None,
             if r:
                 issues[pd['page']] = r
 
-        # kumiko-primary: try to fix EVERY low-confidence page with the model
-        # (replaces kumiko only when the model returns a cleaner multi-panel
+        # kumiko-primary: try to fix EVERY low-confidence page with the fallback
+        # engine (replaces kumiko only when the engine returns a cleaner multi-panel
         # result). 'none' disables it, 'auto' degrades quietly if the [model] extra
-        # is missing, 'model' requires it. Skipped when detector=='model' (the model
-        # is already the primary detector -- the coverage guarantee handles the rest).
-        to_fix = [] if (fallback == 'none' or detector == 'model') else sorted(issues)
+        # is missing, 'model' requires it. Skipped when an engine is already the
+        # primary detector (--detector model, or --thorough) -- the coverage
+        # guarantee handles the rest.
+        to_fix = ([] if (fallback == 'none' or detector == 'model' or magi_primary)
+                  else sorted(issues))
         if to_fix:
+            engine = None
+            if magi:
+                from . import magi as engine
+                log('  fallback engine: Magi (non-commercial model; opt-in)')
             try:
-                _run_fallback(pages, pages_data, to_fix, rtl, model_path, model_conf, log)
+                _run_fallback(pages, pages_data, to_fix, rtl, model_path, model_conf,
+                              log, engine=engine)
             except ImportError:
-                if fallback == 'model':
-                    raise  # user explicitly asked for the model; surface the install hint
+                if magi or fallback == 'model':
+                    raise  # user explicitly asked for an engine; surface the install hint
                 elif any(r == 'crash' for r in issues.values()):
                     n = sum(1 for r in issues.values() if r == 'crash')
                     log(f'  {n} page(s) kumiko could not parse; install '

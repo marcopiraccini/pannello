@@ -28,7 +28,19 @@ Third-party components
    - License: GNU Affero General Public License v3 (AGPL-3.0).
    - Source: https://github.com/ultralytics/ultralytics
 
-4. OpenCV (opencv-python), NumPy, Requests
+4. ragavsachdeva/magi  (optional fallback engine; enabled only with --magi)
+   - NOT bundled. Downloaded at runtime from the Hugging Face Hub, and ONLY
+     when the user explicitly passes --magi (never by default).
+   - License: NON-COMMERCIAL. The model card grants use only for "personal,
+     research, non-commercial, and not-for-profit" purposes; other uses require
+     contacting the author. pannello imposes no such restriction -- it is the
+     user's choice to enable Magi, and doing so is their acceptance of Magi's
+     license. The [magi] extra and --magi are off by default, and pannello is
+     fully functional without them.
+   - Source: https://huggingface.co/ragavsachdeva/magi
+   - transformers (pinned in the [magi] extra) is licensed Apache-2.0.
+
+5. OpenCV (opencv-python), NumPy, Requests
    - Runtime dependencies, installed from PyPI. Apache-2.0 / BSD / Apache-2.0.
 
 ================================================================================

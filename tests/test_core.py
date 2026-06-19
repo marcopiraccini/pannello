@@ -74,6 +74,62 @@ class GenerateTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 core.generate(comic, rtl=False, fallback='none', limit=-1)
 
+    def test_fallback_accepts_overlapping_engine_output_via_deoverlap(self):
+        # A big panel's bbox overlapping its neighbours is a legit layout: the
+        # fallback must clip it apart and ACCEPT it, not reject it as anomalous.
+        class OverlapEngine:
+            @staticmethod
+            def load_model(model_path=None):
+                pass
+
+            @staticmethod
+            def detect_panels(path, rtl=False, model_path=None, conf=0.25):
+                return [[0, 0, 60, 100], [40, 0, 60, 100]], (100, 100)  # overlap x 0.4-0.6
+
+            @staticmethod
+            def normalize(boxes, size):
+                w, h = size
+                return [{'x': x / w, 'y': y / h, 'w': bw / w, 'h': bh / h}
+                        for x, y, bw, bh in boxes]
+
+        pages = [Path('p1.png')]
+        pages_data = [{'page': 1, 'image': 'p1.png',
+                       'panels': [{'x': 0.0, 'y': 0.0, 'w': 1.0, 'h': 1.0}]}]
+        rescued = core._run_fallback(pages, pages_data, [1], False, None, 0.25,
+                                     lambda *a: None, engine=OverlapEngine)
+
+        self.assertEqual(rescued, 1)
+        self.assertEqual(pages_data[0]['source'], 'model')
+        self.assertGreaterEqual(len(pages_data[0]['panels']), 2)
+        self.assertFalse(core.detect_anomalies(pages_data[0]['panels']))
+
+    def test_fallback_rejects_engine_output_that_loses_extent(self):
+        # Engine covers only the left half -> it dropped a region kumiko had -> reject.
+        class HalfEngine:
+            @staticmethod
+            def load_model(model_path=None):
+                pass
+
+            @staticmethod
+            def detect_panels(path, rtl=False, model_path=None, conf=0.25):
+                return [[0, 0, 25, 100], [25, 0, 25, 100]], (100, 100)  # only x 0-0.5
+
+            @staticmethod
+            def normalize(boxes, size):
+                w, h = size
+                return [{'x': x / w, 'y': y / h, 'w': bw / w, 'h': bh / h}
+                        for x, y, bw, bh in boxes]
+
+        pages = [Path('p1.png')]
+        kept = [{'x': 0.0, 'y': 0.0, 'w': 1.0, 'h': 1.0}]
+        pages_data = [{'page': 1, 'image': 'p1.png', 'panels': kept}]
+        rescued = core._run_fallback(pages, pages_data, [1], False, None, 0.25,
+                                     lambda *a: None, engine=HalfEngine)
+
+        self.assertEqual(rescued, 0)
+        self.assertNotIn('source', pages_data[0])
+        self.assertEqual(pages_data[0]['panels'], kept)
+
     def test_extract_archive_missing_tool_raises_helpful_error(self):
         with tempfile.TemporaryDirectory() as td:
             dest = Path(td)

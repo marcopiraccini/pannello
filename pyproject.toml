@@ -31,6 +31,17 @@ model = [
     "ultralytics",
     "huggingface_hub",
 ]
+# Magi fallback engine (opt-in, --magi). NOTE: the Magi model is NON-COMMERCIAL
+# (personal/research/non-profit use only) -- see README. Magi needs an older
+# transformers (~4.36); pinned for a reproducible, working install.
+magi = [
+    "torch",
+    "transformers==4.36.2",
+    "einops",
+    "shapely",
+    "timm",
+    "huggingface_hub",
+]
 
 [project.scripts]
 pannello = "pannello.cli:main"

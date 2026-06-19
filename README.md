@@ -67,6 +67,32 @@ CPU-only, no GPU required:
 The default fallback model is `general` (Western/general comics). Weights
 download on first use into the Hugging Face cache.
 
+### Magi fallback engine (optional, higher precision)
+
+For much more precise panels -- especially irregular/splash layouts where kumiko
+collapses to a full page -- you can use [Magi](https://huggingface.co/ragavsachdeva/magi)
+as the fallback engine instead of the YOLO model. It segments panels noticeably
+better (on Western/colour pages too -- it grayscales internally), but is ~2GB and
+slow (~2-7s/page on CPU).
+
+```sh
+# from a checkout (venv):
+.venv/bin/pip install -e '.[magi]'   # transformers (pinned ~4.36) + torch + deps
+
+# or if you installed the pannello command with pipx, add the deps to its env:
+pipx inject pannello "transformers==4.36.2" einops shapely timm
+# (torch comes with the [model] extra; if you don't have it: pipx inject pannello torch)
+
+pannello comic.cbz --magi            # kumiko primary; Magi rescues the pages it botched
+pannello comic.cbz --thorough        # Magi only: kumiko off, Magi detects every page (slow)
+```
+
+> **License: Magi is NON-COMMERCIAL.** Its model card grants use only for
+> "personal, research, non-commercial, and not-for-profit" purposes. pannello
+> never downloads or uses Magi unless you pass `--magi`; opting in is your
+> acceptance of Magi's license. It is never the default and never a hard
+> dependency -- the AGPL `pannello` tool works fully without it.
+
 ## Usage
 
 ```sh
@@ -77,6 +103,7 @@ pannello library/ -o out/            # write all JSON into out/
 pannello manga.cbz --rtl --model manga   # manga: right-to-left + manga model
 pannello comic.cbr --preview         # also write contact sheets to inspect the panels
 pannello --repack comic.pdf          # convert PDF -> CBZ (+ JSON); --dpi N for resolution
+pannello comic.cbz --magi            # higher-precision panels (Magi fallback; opt-in)
 pannello --help
 ```
 
@@ -119,7 +146,8 @@ Key flags: `--rtl`/`--ltr` (force reading order), `--preview`, `--review`,
 `-o/--out-dir`, `-j/--jobs` (default cores-2), `--limit N` (first N pages, for
 testing), `--dpi N` (PDF render resolution, default 150),
 `--fallback {auto,model,none}`, `--detector {kumiko,model}` (experimental),
-`--model`, `--model-conf`, `-V/--version`.
+`--magi` (higher-precision fallback engine), `--thorough` (re-check clean pages
+with Magi), `--model`, `--model-conf`, `-V/--version`.
 
 ### Reading direction
 
@@ -183,6 +211,26 @@ This trades per-panel zoom for safety on pages no detector handles well (dense /
 borderless art): they become "whole page, pan it" rather than wrong cuts. Note one
 case it can't catch: a splash kumiko splits into a couple of clean full-width bands
 is indistinguishable from a real stacked-panel page, so it ships as-is.
+
+#### Gross vs subtle errors (why `--thorough` exists)
+
+The triggers above catch **gross** failures -- kumiko returned 0/1 panel, or boxes
+with slivers/overlaps/holes. The Magi fallback (`--magi`) fixes exactly these (e.g.
+a splash page kumiko gave up on and returned as one full-page box).
+
+What no cheap signal can catch is a **subtle** failure: kumiko returns a
+plausible-looking grid whose boundaries are slightly wrong. Such a page scores
+perfect on every heuristic (full coverage, no hole, no overlap, grid-aligned) --
+it's geometrically indistinguishable from a page kumiko got right. The only thing
+that "knows" it's wrong is a better detector. Since Magi is strictly more precise
+than kumiko, running it where kumiko was actually fine costs only *time*, never
+quality -- so this is a speed budget, not an accuracy problem:
+
+- `--magi`: kumiko stays primary; Magi runs only on the gross-failure pages. Fast,
+  catches the splash/full-page cases.
+- `--thorough`: kumiko is **disabled** -- Magi detects every page and its result is
+  authoritative (a <2-panel page is a real splash, not a failure). This is the only
+  way to catch the subtle errors. Slowest, best quality.
 
 ### Choosing the model
 
