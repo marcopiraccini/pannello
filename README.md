@@ -98,6 +98,7 @@ pannello comic.cbz --thorough        # Magi on every page, kumiko as a safety ne
 ```sh
 pannello "My Comic.cbz"              # -> "My Comic.json" next to it
 pannello /path/to/library            # batch: one JSON per cbr/cbz found (recursive)
+pannello vol1.cbz vol2.cbz dir/      # multiple files and/or folders in one run
 pannello comic.cbz --rtl             # manga (right-to-left reading order)
 pannello library/ -o out/            # write all JSON into out/
 pannello manga.cbz --rtl --model manga   # manga: right-to-left + manga model

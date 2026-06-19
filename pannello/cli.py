@@ -72,9 +72,10 @@ def main(argv=None):
         description='Detect comic panels and write KOReader panel-zoom JSON '
                     '(<comic>.json) using the official kumiko, with an optional model fallback.')
     direction = ap.add_mutually_exclusive_group()
-    ap.add_argument('input',
-                    help='a comic (cbz/cbr/cb7/cbt/pdf), a folder of comics '
-                         '(one JSON per archive), or a folder of page images')
+    ap.add_argument('input', nargs='+',
+                    help='one or more comics (cbz/cbr/cb7/cbt/pdf) and/or folders. '
+                         'A folder is scanned recursively (one JSON per archive); a '
+                         'folder of page images is treated as a single comic')
     ap.add_argument('--repack', action='store_true',
                     help='first normalize the comic to a CBZ with flat reading-order '
                          'page names (fixes books KOReader sorts wrong), then write JSON for it')
@@ -135,14 +136,27 @@ def main(argv=None):
     if args.thorough:
         args.magi = True
 
-    src = os.path.expanduser(args.input)
+    ok = total = 0
+    for src in args.input:
+        o, t = _process_input(src, args)
+        ok += o
+        total += t
+    if len(args.input) > 1:
+        _log(f'total: {ok}/{total} ok')
+    return 0 if ok else 1
+
+
+def _process_input(src, args):
+    """Handle one input path: a file, a folder of archives (batch), or a folder of
+    page images. Returns (ok_count, total_count)."""
+    src = os.path.expanduser(src)
     if not os.path.exists(src):
         _log(f'error: not found: {src}')
-        return 1
+        return 0, 1
 
     # A single archive/pdf, a folder of archives (batch), or a folder of images.
     if os.path.isfile(src):
-        return 0 if _process(src, args) else 1
+        return (1, 1) if _process(src, args) else (0, 1)
 
     comics = core.find_comics(src)
     if comics:
@@ -151,10 +165,10 @@ def main(argv=None):
         for i, c in enumerate(comics, 1):
             ok += _process(c, args, label=f'[{i}/{len(comics)}] ')
         _log(f'done: {ok}/{len(comics)} comics')
-        return 0 if ok else 1
+        return ok, len(comics)
 
     # No archives inside: treat the folder itself as one comic (folder of pages).
-    return 0 if _process(src, args) else 1
+    return (1, 1) if _process(src, args) else (0, 1)
 
 
 if __name__ == '__main__':
