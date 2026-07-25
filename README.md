@@ -1,7 +1,7 @@
 # pannello
 
-Detect comic-book panels and write the per-page JSON used by KOReader
-panel-zoom plugins. Point it at a `.cbz`/`.cbr` (or a whole folder) and it
+Detect comic-book panels and write the per-page JSON used by [KOReader
+panel-zoom plugins](https://github.com/Kaito0/panelreader.koplugin). Point it at a `.cbz`/`.cbr` (or a whole folder) and it
 produces a `<comic>.json` next to each file.
 
 Panel detection uses the official [kumiko](https://github.com/njean42/kumiko)
